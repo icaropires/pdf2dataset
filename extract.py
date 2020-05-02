@@ -48,31 +48,34 @@ def ocr_image(img):
 
 def get_pdf_files(input_dir):
     print('Looking for PDF files...')
-    pdf_files = list(input_dir.glob('**/*.pdf'))
+    pdf_files = list(input_dir.rglob('*.pdf'))
     print(f'Found {len(pdf_files)} documents! Starting processing...')
 
     return pdf_files
 
 
+def get_output_path(root, input_path, output_dir):
+    relative = input_path.relative_to(root)
+    out_path = output_dir / relative
+    out_path.parent.mkdir(parents=True, exist_ok=True)  # Side effect
+
+    return out_path
+
+
 # TODO: Skip parsed files
-def process_file(path, output_dir):
+def process_file(path, output_path):
     '''
     Will replicate the directory structure of PDF files and save the results
     for each file in the corresponding position in the new structure
     '''
     error_suffix = '_error.log'
-
-    out_path = output_dir / path
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    error_path = out_path.with_name(out_path.stem + error_suffix)
+    error_file = output_path.with_name(output_path.stem + error_suffix)
 
     # Tests if can parse PDF
     try:
         img = get_page_img(path, 1)
     except Exception as e:
-        with error_path.open('w') as f:
-            f.write(f'{e}\n\n')
-
+        error_file.write_text(f'{e}')
         return
 
     errors = []
@@ -81,19 +84,17 @@ def process_file(path, output_dir):
             img = get_page_img(path, page_num)
             text = ocr_image(img)
 
-            name = out_path.stem + f'_{page_num}.txt'
-            result_path = out_path.with_name(name)
-            with result_path.open('w') as f:
-                f.write(text)
+            name = output_path.stem + f'_{page_num}.txt'
+            results_file = output_path.with_name(name)
+            results_file.write_text(text)
         except IndexError:
             # All pages processed
             break
         except Exception as e:
-            errors.append(f'Page {page_num}: {e}\n\n')
+            errors.append(f'Page {page_num}: {e}')
 
     if errors:
-        with error_path.open('w') as f:
-            f.write(''.join(errors))
+        error_file.write_text('\n\n'.join(errors))
 
 
 if __name__ == '__main__':
@@ -111,15 +112,21 @@ if __name__ == '__main__':
         help='''The folder to keep all the results, including log files and
 intermediate files'''
     )
+    parser.add_argument(
+        '--workers',
+        type=int,
+        default=min(32, os.cpu_count() + 4),
+        help='''Workers to use in the pool'''
+    )
 
     args = parser.parse_args()
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
+    max_workers = args.workers
 
     pdf_files = get_pdf_files(input_dir)
 
-    max_workers = min(32, os.cpu_count() + 4)
-    print(f'PDFs directory: {input_dir}'
+    print(f'\nPDFs directory: {input_dir}'
           f'\nOutput directory: {output_dir}'
           f'\nUsing {max_workers} workers', end='\n\n')
 
@@ -127,7 +134,9 @@ intermediate files'''
         with tqdm(total=len(pdf_files), unit='docs') as pbar:
 
             def submit(path):
-                future = executor.submit(process_file, path, output_dir)
+                output_path = get_output_path(input_dir, path, output_dir)
+
+                future = executor.submit(process_file, path, output_path)
                 future.add_done_callback(lambda _: pbar.update())
 
                 return future
