@@ -120,8 +120,8 @@ intermediate files'''
     )
 
     args = parser.parse_args()
-    input_dir = Path(args.input_dir)
-    output_dir = Path(args.output_dir)
+    input_dir = Path(args.input_dir).resolve()
+    output_dir = Path(args.output_dir).resolve()
     max_workers = args.workers
 
     pdf_files = get_pdf_files(input_dir)
