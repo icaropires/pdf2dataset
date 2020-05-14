@@ -13,10 +13,6 @@ from pdf2image import convert_from_path
 from tqdm import tqdm
 
 
-# To pytesseract use only one core per worker
-os.environ['OMP_THREAD_LIMIT'] = '1'
-
-
 def get_page_img(path, page_number):
     img = convert_from_path(
         path,
@@ -29,6 +25,9 @@ def get_page_img(path, page_number):
 
 
 def ocr_image(img):
+    # To pytesseract use only one core per worker
+    os.environ['OMP_THREAD_LIMIT'] = '1'
+
     tsh = np.array(img.convert('L'))
     tsh = cv2.adaptiveThreshold(
         tsh, 255,
@@ -46,12 +45,11 @@ def ocr_image(img):
     return pytesseract.image_to_string(erd, lang='por')
 
 
-def get_pdf_files(input_dir):
-    print('Looking for PDF files...')
-    pdf_files = list(input_dir.rglob('*.pdf'))
-    print(f'Found {len(pdf_files)} documents! Starting processing...')
+def get_documents(input_dir):
+    pdf_files = input_dir.rglob('*.pdf')
 
-    return pdf_files
+    # Here feedback is better than keep using the generator
+    return list(tqdm(pdf_files, desc='Looking for files', unit='docs'))
 
 
 def get_output_path(root, input_path, output_dir):
@@ -63,12 +61,11 @@ def get_output_path(root, input_path, output_dir):
 
 
 # TODO: Skip parsed files
-def process_file(path, output_path):
+def process_file(path, output_path, *, error_suffix='_error.log'):
     '''
     Will replicate the directory structure of PDF files and save the results
     for each file in the corresponding position in the new structure
     '''
-    error_suffix = '_error.log'
     error_file = output_path.with_name(output_path.stem + error_suffix)
 
     # Tests if can parse PDF
@@ -95,7 +92,6 @@ def process_file(path, output_path):
 
     if errors:
         error_file.write_text('\n\n'.join(errors))
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -124,14 +120,14 @@ intermediate files'''
     output_dir = Path(args.output_dir).resolve()
     max_workers = args.workers
 
-    pdf_files = get_pdf_files(input_dir)
+    pdf_files = get_documents(input_dir)
 
     print(f'\nPDFs directory: {input_dir}'
           f'\nOutput directory: {output_dir}'
           f'\nUsing {max_workers} workers', end='\n\n')
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        with tqdm(total=len(pdf_files), unit='docs') as pbar:
+        with tqdm(total=len(pdf_files), unit='docs', dynamic_ncols=True) as pbar:
 
             def submit(path):
                 output_path = get_output_path(input_dir, path, output_dir)
