@@ -3,13 +3,15 @@
 import argparse
 import os
 import traceback
+from concurrent import futures
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pytesseract
 from pdf2image import convert_from_path, pdfinfo_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
+import pytesseract
 from ray.util.multiprocessing import Pool
 from tqdm import tqdm
 
@@ -163,13 +165,21 @@ class TextExtraction:
                 unit='pages', dynamic_ncols=True
             )
 
-        with Pool() as pool:
-            results = pool.imap_unordered(
-                self._process_task, tasks, chunksize=chunksize
-            )
+        # There can be many files to be saved, so doing async
+        with ThreadPoolExecutor() as exe:
+            save_fs = []
 
-            for task, result, error in get_bar(results):
-                self.save_result(result, task, error)  # TODO: threads, async
+            with Pool() as pool:
+                results = pool.imap_unordered(
+                    self._process_task, tasks, chunksize=chunksize
+                )
+
+                for task, result, error in get_bar(results):
+                    save_fs.append(
+                        exe.submit(self.save_result, task, error)
+                    )
+
+            futures.wait(save_fs)
 
 
 if __name__ == '__main__':
