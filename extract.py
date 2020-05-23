@@ -2,8 +2,8 @@
 
 import argparse
 import os
+import pickle
 import traceback
-from concurrent import futures
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -12,12 +12,12 @@ import numpy as np
 from pdf2image import convert_from_path, pdfinfo_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 import pytesseract
+import ray
 from ray.util.multiprocessing import Pool
 from tqdm import tqdm
 
 
 # TODO: Add typing
-# TODO: Return everything joined
 
 
 class ExtractionTask:
@@ -95,7 +95,6 @@ class TextExtraction:
         # 10 is not a mistake, is because this is a fast operation
         chunksize = max(1, (len(docs)/self.max_workers)//10)
 
-        print()
         tasks = []
         with tqdm(desc='Generating tasks', unit='tasks') as pbar:
             with Pool() as pool:
@@ -126,22 +125,29 @@ class TextExtraction:
         return out_path
 
     def save_result(self, result, task, error):
-        if error is not None:
+        '''
+        Saves the result to a file and returns (path, result)
+        '''
+        path = None
+
+        if result is not None:
+            output_path = self.get_output_path(task.doc)
+            name = f'{output_path.stem}_{task.page}.txt'
+
+            path = output_path.with_name(name)
+            path.write_text(result)
+
+        elif error is not None:
             page = task.page if task.page != -1 else 'doc'
             error_suffix = f'_{page}_error.log'
 
             output_path = self.get_output_path(task.doc)
             name = output_path.stem + error_suffix
 
-            error_file = output_path.with_name(name)
-            error_file.write_text(error)
+            path = output_path.with_name(name)
+            path.write_text(error)
 
-        elif result is not None:
-            output_path = self.get_output_path(task.doc)
-            name = f'{output_path.stem}_{task.page}.txt'
-
-            results_file = output_path.with_name(name)
-            results_file.write_text(result)
+        return path, result, error
 
     @staticmethod
     def _process_task(task):
@@ -165,7 +171,10 @@ class TextExtraction:
                 unit='pages', dynamic_ncols=True
             )
 
-        # There can be many files to be saved, so doing async
+        docs_to_texts = {}
+        errors = []
+
+        # There can be many files to be saved, so, doing async
         with ThreadPoolExecutor() as exe:
             save_fs = []
 
@@ -176,10 +185,19 @@ class TextExtraction:
 
                 for task, result, error in get_bar(results):
                     save_fs.append(
-                        exe.submit(self.save_result, task, error)
+                        exe.submit(self.save_result, result, task, error)
                     )
 
-            futures.wait(save_fs)
+            for f in save_fs:
+                path, result, error = f.result()
+
+                if result is not None:
+                    docs_to_texts[path] = result
+
+                elif error is not None:
+                    errors.append(f'{path}: {error}')
+
+        return docs_to_texts, errors
 
 
 if __name__ == '__main__':
@@ -203,12 +221,33 @@ if __name__ == '__main__':
         default=TextExtraction.default_workers,
         help='Workers to use in the pool'
     )
+    parser.add_argument(
+        '--results-file',
+        type=str,
+        default='texts.pickle',
+        help='File to save a pickle with the results'
+    )
+    parser.add_argument(
+        '--errors-file',
+        type=str,
+        default='errors.log',
+        help='File to save error logs'
+    )
 
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
+    results_file = Path(args.results_file)
+    errors_file = Path(args.errors_file)
     max_workers = args.workers
 
+    ray.init()
+    print()
+
     extraction = TextExtraction(input_dir, output_dir, max_workers=max_workers)
-    extraction.apply()
+    result, errors = extraction.apply()
+
+    results_file.write_bytes(pickle.dumps(result))
+    errors_file.write_text('\n\n'.join(errors))
+    print(f"Results saved to '{results_file}' and errors to '{errors_file}'!")
