@@ -1,0 +1,8 @@
+[flake8]
+
+exclude =
+  __pycache__/*,
+  env/*,
+  venv/*,
+  .env/*,
+  .venv/*,
