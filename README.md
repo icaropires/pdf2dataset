@@ -1,9 +1,9 @@
 # Extract text
 
-For extracting text from PDFs
+For extracting text from PDFs and save to a dataset
 
 ## Usage example
 
 ``` bash
-OMP_THREAD_LIMIT=1 python3 extract.py > log.txt
+python3 pdf2dataset/extract.py pdfs txts
 ```
