@@ -1,0 +1,38 @@
+name: pdf2dataset
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.7, 3.8]
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        apt update
+        apt install -y poppler-utils tesseract-ocr-por
+        
+        python -m pip install --upgrade pip
+        pip install flake8 pytest
+        pip install -r requirements.txt
+        
+    - name: Lint with flake8
+      run: |
+        flake8 . --show-source --statistics
+        
+    - name: Test with pytest
+      run: |
+        pytest
