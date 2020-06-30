@@ -1,5 +1,7 @@
 # Extract text
 
+![pdf2dataset](https://github.com/icaropires/pdf2dataset/workflows/pdf2dataset/badge.svg)
+
 For extracting text from PDFs and save to a dataset
 
 ## Install
