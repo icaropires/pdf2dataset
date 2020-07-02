@@ -1,18 +1,18 @@
 #!/bin/env python3
 
-import argparse
 import os
-import pickle
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from functools import partial
+import threading
 
+import pandas as pd
+import fastparquet
 import cv2
 import numpy as np
 from pdf2image import convert_from_path, pdfinfo_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 import pytesseract
-import ray
 from ray.util.multiprocessing import Pool
 from tqdm import tqdm
 
@@ -45,6 +45,7 @@ class ExtractionTask:
             iterations=1
         )
 
+        # TODO: choose language
         return pytesseract.image_to_string(erd, lang='por')
 
     def get_page_img(self):
@@ -52,6 +53,7 @@ class ExtractionTask:
             self.doc,
             first_page=self.page,
             single_file=True,
+            size=(None, 1100),
             fmt='jpeg'
         )
 
@@ -60,9 +62,14 @@ class ExtractionTask:
     def process(self):
         text, error = None, None
 
+        # Ray can handle the exceptions, but this makes switching to
+        #   multiprocessing easy
         try:
             img = self.get_page_img()
+
+            # TODO: Use OCR?
             text = self.ocr_image(img)
+
         except (PDFPageCountError, PDFSyntaxError):
             error = traceback.format_exc()
 
@@ -72,10 +79,15 @@ class ExtractionTask:
 class TextExtraction:
     default_workers = min(32, os.cpu_count() + 4)  # Python 3.8 default
 
-    def __init__(self, input_dir, output_dir, *, max_workers=default_workers):
+    def __init__(self, input_dir, results_file, output_dir, *,
+                 max_workers=default_workers):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.max_workers = max_workers
+        self.results_file = results_file
+
+        self._df_lock = threading.Lock()
+        self._chunk_df_size = 10000  # Dask default
 
     @staticmethod
     def _list_pages(d):
@@ -92,7 +104,7 @@ class TextExtraction:
         Returns tasks to be processed.
         For faulty documents, only the page -1 will be available
         '''
-        # 10 is not a mistake, is because this is a fast operation
+        # 10 because this is a fast operation
         chunksize = max(1, (len(docs)/self.max_workers)//10)
 
         tasks = []
@@ -101,9 +113,11 @@ class TextExtraction:
                 results = pool.imap(
                     self._list_pages, docs, chunksize=chunksize
                 )
-                results = zip(docs, results)
 
-                for doc, range_pages in results:
+                for doc, range_pages in zip(docs, results):
+                    if isinstance(range_pages, Exception):
+                        raise range_pages
+
                     new_tasks = [ExtractionTask(doc, p) for p in range_pages]
                     tasks += new_tasks
                     pbar.update(len(new_tasks))
@@ -114,7 +128,7 @@ class TextExtraction:
     def get_docs(input_dir):
         pdf_files = input_dir.rglob('*.pdf')
 
-        # Here feedback is better than keep using the generator
+        # Here feedback is better than keeping use of the generator
         return list(tqdm(pdf_files, desc='Looking for files', unit='docs'))
 
     def get_output_path(self, doc_path):
@@ -124,30 +138,62 @@ class TextExtraction:
 
         return out_path
 
-    def save_result(self, result, task, error):
+    def _get_savinginfo(self, task_result):
         '''
-        Saves the result to a file and returns (path, result)
+        Saves the temporary results for each file and returns the path
         '''
-        path = None
+        task, result, error = task_result
+        output_path = self.get_output_path(task.doc)
 
+        text = None
         if result is not None:
-            output_path = self.get_output_path(task.doc)
             name = f'{output_path.stem}_{task.page}.txt'
-
-            path = output_path.with_name(name)
-            path.write_text(result)
+            text = result
+            is_error = False
 
         elif error is not None:
             page = task.page if task.page != -1 else 'doc'
             error_suffix = f'_{page}_error.log'
 
-            output_path = self.get_output_path(task.doc)
             name = output_path.stem + error_suffix
+            text = error
+            is_error = True
 
-            path = output_path.with_name(name)
-            path.write_text(error)
+        else:
+            raise RuntimeError("Processing failed and no errors detected!")
 
-        return path, result, error
+        tmpfile = output_path.with_name(name)
+        return tmpfile, text, is_error
+
+    def _append_df(self, texts, errors):
+        df = pd.DataFrame()
+
+        if texts:
+            path, texts = zip(*texts)
+            df = pd.DataFrame({'path': path, 'text': texts, 'error': ''},
+                              dtype='str')
+
+        if errors:
+            path, errors = zip(*errors)
+
+            df = pd.concat([
+                df,
+                pd.DataFrame(
+                    {'path': path, 'text': '', 'error': errors}, dtype='str'
+                ),
+            ])
+
+        save = partial(
+            fastparquet.write, str(self.results_file), df,
+            file_scheme='hive', compression='gzip'
+        )
+        with self._df_lock:
+            if self.results_file.exists():
+                save(append=True)
+            else:
+                save()
+
+        return df
 
     @staticmethod
     def _process_task(task):
@@ -155,7 +201,7 @@ class TextExtraction:
         return task, result, error
 
     def apply(self):
-        pdf_files = self.get_docs(input_dir)
+        pdf_files = self.get_docs(self.input_dir)
         tasks = self.gen_tasks(pdf_files)
 
         chunksize = max(1, (len(tasks)/self.max_workers)//100)
@@ -171,83 +217,43 @@ class TextExtraction:
                 unit='pages', dynamic_ncols=True
             )
 
-        docs_to_texts = {}
-        errors = []
-
         # There can be many files to be saved, so, doing async
-        with ThreadPoolExecutor() as exe:
-            save_fs = []
+        with ThreadPoolExecutor() as thread_exe:
+            thread_fs, texts, errors = [], [], []
 
-            with Pool() as pool:
-                results = pool.imap_unordered(
+            # TODO: skip already preprocessed on tmp
+            with Pool() as pool:  # May be distributed
+                tasks_results = pool.imap_unordered(
                     self._process_task, tasks, chunksize=chunksize
                 )
 
-                for task, result, error in get_bar(results):
-                    save_fs.append(
-                        exe.submit(self.save_result, result, task, error)
+                for task_result in get_bar(tasks_results):
+
+                    if isinstance(task_result, Exception):
+                        raise task_result
+
+                    path, text, is_error = self._get_savinginfo(task_result)
+
+                    if not is_error:
+                        texts.append((path, text))
+                    else:
+                        errors.append((path, text))
+
+                    thread_fs.append(
+                        thread_exe.submit(path.write_text, text)
                     )
 
-            for f in save_fs:
-                path, result, error = f.result()
+                    if len(texts) + len(errors) >= self._chunk_df_size:
+                        # Persist to disk, aiming large amount of data
+                        thread_fs.append(
+                            thread_exe.submit(self._append_df, texts, errors)
+                        )
+                        texts, errors = [], []
 
-                if result is not None:
-                    docs_to_texts[path] = result
+            if texts or errors:
+                thread_fs.append(
+                    thread_exe.submit(self._append_df, texts, errors)
+                )
 
-                elif error is not None:
-                    errors.append(f'{path}: {error}')
-
-        return docs_to_texts, errors
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description='Extract text from all PDF files in a directory'
-    )
-    parser.add_argument(
-        'input_dir',
-        type=str,
-        help='The folder to lookup for PDF files recursively'
-    )
-    parser.add_argument(
-        'output_dir',
-        type=str,
-        help=('The folder to keep all the results, including log files and'
-              ' intermediate files')
-    )
-    parser.add_argument(
-        '--workers',
-        type=int,
-        default=TextExtraction.default_workers,
-        help='Workers to use in the pool'
-    )
-    parser.add_argument(
-        '--results-file',
-        type=str,
-        default='texts.pickle',
-        help='File to save a pickle with the results'
-    )
-    parser.add_argument(
-        '--errors-file',
-        type=str,
-        default='errors.log',
-        help='File to save error logs'
-    )
-
-    args = parser.parse_args()
-
-    input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
-    results_file = Path(args.results_file)
-    errors_file = Path(args.errors_file)
-    max_workers = args.workers
-
-    ray.init()
-    print()
-
-    extraction = TextExtraction(input_dir, output_dir, max_workers=max_workers)
-    result, errors = extraction.apply()
-
-    results_file.write_bytes(pickle.dumps(result))
-    errors_file.write_text('\n\n'.join(errors))
-    print(f"Results saved to '{results_file}' and errors to '{errors_file}'!")
+            for f in thread_fs:  # Avoid fail silently
+                f.result()
