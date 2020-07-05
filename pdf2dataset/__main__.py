@@ -4,7 +4,7 @@ from pathlib import Path
 from . import TextExtraction
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(
         description='Extract text from all PDF files in a directory'
     )
@@ -32,10 +32,10 @@ if __name__ == '__main__':
         help='File to save a pickle with the results'
     )
     parser.add_argument(
-        '--errors-file',
+        '--lang',
         type=str,
-        default='errors.log',
-        help='File to save error logs'
+        default='por',
+        help='Tesseract language'
     )
 
     args = parser.parse_args()
@@ -43,8 +43,8 @@ if __name__ == '__main__':
     input_dir = Path(args.input_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
     results_file = Path(args.results_file)
-    errors_file = Path(args.errors_file)
     max_workers = args.workers
+    lang = args.lang
 
     ray.init()
     print()
@@ -53,8 +53,13 @@ if __name__ == '__main__':
         input_dir,
         results_file,
         output_dir=output_dir,
-        max_workers=max_workers
+        max_workers=max_workers,
+        lang=lang
     )
     extraction.apply()
 
     print(f"Results saved to '{results_file}'!")
+
+
+if __name__ == '__main__':
+    main()

@@ -15,6 +15,7 @@ from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 import pytesseract
 from ray.util.multiprocessing import Pool
 from tqdm import tqdm
+from pathlib import Path
 
 
 # TODO: Add typing
@@ -22,12 +23,12 @@ from tqdm import tqdm
 
 class ExtractionTask:
 
-    def __init__(self, doc, page):
+    def __init__(self, doc, page, lang='por'):
         self.doc = doc
         self.page = page
+        self.lang = lang
 
-    @staticmethod
-    def ocr_image(img):
+    def ocr_image(self, img):
         # So pytesseract uses only one core per worker
         os.environ['OMP_THREAD_LIMIT'] = '1'
 
@@ -45,8 +46,7 @@ class ExtractionTask:
             iterations=1
         )
 
-        # TODO: choose language
-        return pytesseract.image_to_string(erd, lang='por')
+        return pytesseract.image_to_string(erd, lang=self.lang)
 
     def get_page_img(self):
         img = convert_from_path(
@@ -80,11 +80,15 @@ class TextExtraction:
     default_workers = min(32, os.cpu_count() + 4)  # Python 3.8 default
 
     def __init__(self, input_dir, results_file, output_dir, *,
-                 max_workers=default_workers):
-        self.input_dir = input_dir
-        self.output_dir = output_dir
+                 max_workers=default_workers, lang='por'):
+
+        # TODO: Check if input_dir is a dir
+        self.input_dir = Path(input_dir).resolve()
+        self.output_dir = Path(output_dir).resolve()
+        self.results_file = Path(results_file)
         self.max_workers = max_workers
-        self.results_file = results_file
+
+        self.lang = lang
 
         self._df_lock = threading.Lock()
         self._chunk_df_size = 10000  # Dask default
@@ -118,7 +122,8 @@ class TextExtraction:
                     if isinstance(range_pages, Exception):
                         raise range_pages
 
-                    new_tasks = [ExtractionTask(doc, p) for p in range_pages]
+                    new_tasks = [ExtractionTask(doc, p, self.lang)
+                                 for p in range_pages]
                     tasks += new_tasks
                     pbar.update(len(new_tasks))
 
