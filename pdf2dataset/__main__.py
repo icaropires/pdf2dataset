@@ -1,6 +1,5 @@
 import ray
 import argparse
-from pathlib import Path
 from . import TextExtraction
 
 
@@ -14,22 +13,16 @@ def main():
         help='The folder to lookup for PDF files recursively'
     )
     parser.add_argument(
-        'output_dir',
+        'results_file',
+        type=str,
+        default='df.parquet.gzip',
+        help='File to save the resultant dataframe'
+    )
+    parser.add_argument(
+        '--tmp-dir',
         type=str,
         help=('The folder to keep all the results, including log files and'
               ' intermediate files')
-    )
-    parser.add_argument(
-        '--workers',
-        type=int,
-        default=TextExtraction.default_workers,
-        help='Workers to use in the pool'
-    )
-    parser.add_argument(
-        '--results-file',
-        type=str,
-        default='df.parquet.gzip',
-        help='File to save a pickle with the results'
     )
     parser.add_argument(
         '--lang',
@@ -40,25 +33,13 @@ def main():
 
     args = parser.parse_args()
 
-    input_dir = Path(args.input_dir).resolve()
-    output_dir = Path(args.output_dir).resolve()
-    results_file = Path(args.results_file)
-    max_workers = args.workers
-    lang = args.lang
-
     ray.init()
     print()
 
-    extraction = TextExtraction(
-        input_dir,
-        results_file,
-        output_dir=output_dir,
-        max_workers=max_workers,
-        lang=lang
-    )
+    extraction = TextExtraction(**vars(args))
     extraction.apply()
 
-    print(f"Results saved to '{results_file}'!")
+    print(f"Results saved to '{extraction.results_file}'!")
 
 
 if __name__ == '__main__':

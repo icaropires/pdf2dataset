@@ -18,7 +18,8 @@ $ sudo apt install -y poppler-utils tesseract-ocr-por
 ## Usage examples
 
 ``` bash
-$ pdf2dataset pdfs txts
+# Reads all PDFs from my_pdfs_folder and saves the resultant dataframe to my_df.parquet.gzip
+$ pdf2dataset my_pdfs_folder my_df.parquet.gzip
 ```
 
 ## Install

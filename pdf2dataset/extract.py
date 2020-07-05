@@ -1,9 +1,9 @@
 #!/bin/env python3
 
+import tempfile
 import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 import threading
 
 import pandas as pd
@@ -79,15 +79,19 @@ class ExtractionTask:
 class TextExtraction:
     default_workers = min(32, os.cpu_count() + 4)  # Python 3.8 default
 
-    def __init__(self, input_dir, results_file, output_dir, *,
-                 max_workers=default_workers, lang='por'):
+    def __init__(self, input_dir, results_file, *,
+                 tmp_dir=None, max_workers=default_workers, lang='por'):
 
         # TODO: Check if input_dir is a dir
         self.input_dir = Path(input_dir).resolve()
-        self.output_dir = Path(output_dir).resolve()
-        self.results_file = Path(results_file)
-        self.max_workers = max_workers
+        self.results_file = Path(results_file).resolve()
 
+        if tmp_dir:
+            self.tmp_dir = Path(tmp_dir).resolve()
+        else:
+            self.tmp_dir = Path(tempfile.mkdtemp())
+
+        self.max_workers = max_workers
         self.lang = lang
 
         self._df_lock = threading.Lock()
@@ -138,7 +142,7 @@ class TextExtraction:
 
     def get_output_path(self, doc_path):
         relative = doc_path.relative_to(self.input_dir)
-        out_path = self.output_dir / relative
+        out_path = self.tmp_dir / relative
         out_path.parent.mkdir(parents=True, exist_ok=True)  # Side effect
 
         return out_path
@@ -188,15 +192,12 @@ class TextExtraction:
                 ),
             ])
 
-        save = partial(
-            fastparquet.write, str(self.results_file), df,
-            file_scheme='hive', compression='gzip'
-        )
         with self._df_lock:
-            if self.results_file.exists():
-                save(append=True)
-            else:
-                save()
+            fastparquet.write(
+                str(self.results_file), df,
+                file_scheme='hive', compression='gzip',
+                append=self.results_file.exists()
+            )
 
         return df
 
@@ -212,9 +213,11 @@ class TextExtraction:
         chunksize = max(1, (len(tasks)/self.max_workers)//100)
 
         print(f'\nPDFs directory: {self.input_dir}',
-              f'Output directory: {self.output_dir}',
+              f'Results file: {self.results_file}',
               f'Using {self.max_workers} workers',
-              f'Chunksize: {chunksize}', sep='\n', end='\n\n')
+              f'Chunksize: {chunksize}',
+              f'Tmp directory: {self.tmp_dir}',
+              sep='\n', end='\n\n')
 
         def get_bar(results):
             return tqdm(
