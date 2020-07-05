@@ -5,6 +5,7 @@ import os
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 import threading
+import logging
 
 import pandas as pd
 import fastparquet
@@ -13,6 +14,7 @@ import numpy as np
 from pdf2image import convert_from_path, pdfinfo_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 import pytesseract
+import ray
 from ray.util.multiprocessing import Pool
 from tqdm import tqdm
 from pathlib import Path
@@ -77,25 +79,34 @@ class ExtractionTask:
 
 
 class TextExtraction:
-    default_workers = min(32, os.cpu_count() + 4)  # Python 3.8 default
-
-    def __init__(self, input_dir, results_file, *,
-                 tmp_dir=None, max_workers=default_workers, lang='por'):
-
-        # TODO: Check if input_dir is a dir
+    def __init__(
+        self, input_dir, results_file, *,
+        tmp_dir=None, lang='por', **kwargs
+    ):
         self.input_dir = Path(input_dir).resolve()
         self.results_file = Path(results_file).resolve()
+
+        assert self.input_dir.is_dir()
+
+        if self.results_file.exists():
+            logging.warn(f'{results_file} already exists!'
+                         ' Results will be appended to it!')
 
         if tmp_dir:
             self.tmp_dir = Path(tmp_dir).resolve()
         else:
             self.tmp_dir = Path(tempfile.mkdtemp())
 
-        self.max_workers = max_workers
         self.lang = lang
 
         self._df_lock = threading.Lock()
         self._chunk_df_size = 10000  # Dask default
+
+        ray.init(ignore_reinit_error=True, **kwargs)
+        print()  # Shame
+
+        self.num_cpus = kwargs.get('num_cpus', None)
+        self.num_cpus = self.num_cpus or os.cpu_count()
 
     @staticmethod
     def _list_pages(d):
@@ -113,7 +124,7 @@ class TextExtraction:
         For faulty documents, only the page -1 will be available
         '''
         # 10 because this is a fast operation
-        chunksize = max(1, (len(docs)/self.max_workers)//10)
+        chunksize = max(1, (len(docs)/self.num_cpus)//10)
 
         tasks = []
         with tqdm(desc='Generating tasks', unit='tasks') as pbar:
@@ -210,13 +221,14 @@ class TextExtraction:
         pdf_files = self.get_docs(self.input_dir)
         tasks = self.gen_tasks(pdf_files)
 
-        chunksize = max(1, (len(tasks)/self.max_workers)//100)
+        chunksize = max(1, (len(tasks)/self.num_cpus)//100)
 
-        print(f'\nPDFs directory: {self.input_dir}',
+        print('\n=== SUMMARY ===',
+              f'PDFs directory: {self.input_dir}',
               f'Results file: {self.results_file}',
-              f'Using {self.max_workers} workers',
-              f'Chunksize: {chunksize}',
-              f'Tmp directory: {self.tmp_dir}',
+              f'Using {self.num_cpus} CPU(s)',
+              f'Chunksize: {chunksize} (calculated)',
+              f'Temporary directory: {self.tmp_dir}',
               sep='\n', end='\n\n')
 
         def get_bar(results):

@@ -1,4 +1,3 @@
-import ray
 import argparse
 from . import TextExtraction
 
@@ -31,10 +30,33 @@ def main():
         help='Tesseract language'
     )
 
-    args = parser.parse_args()
+    # Ray
+    parser.add_argument(
+        '--num-cpus',
+        type=int,
+        default=None,
+        help='Number of cpus to use'
+    )
+    parser.add_argument(
+        '--address',
+        type=str,
+        default=None,
+        help='Ray address to connect'
+    )
+    parser.add_argument(
+        '--webui-host',
+        type=str,
+        default='*',
+        help='Which port ray webui to listen'
+    )
+    parser.add_argument(
+        '--redis-password',
+        type=str,
+        default='5241590000000000',  # Ray default
+        help='Redis password to use to connect with redis'
+    )
 
-    ray.init()
-    print()
+    args = parser.parse_args()
 
     extraction = TextExtraction(**vars(args))
     extraction.apply()
