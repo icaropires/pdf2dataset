@@ -4,6 +4,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import logging
+import itertools as it
 
 import pandas as pd
 import fastparquet
@@ -57,32 +58,6 @@ class TextExtraction:
 
         return pages
 
-    def gen_tasks(self, docs):
-        '''
-        Returns tasks to be processed.
-        For faulty documents, only the page -1 will be available
-        '''
-        # 10 because this is a fast operation
-        chunksize = max(1, (len(docs)/self.num_cpus)//10)
-
-        tasks = []
-        with tqdm(desc='Generating tasks', unit='tasks') as pbar:
-            with Pool() as pool:
-                results = pool.imap(
-                    self._list_pages, docs, chunksize=chunksize
-                )
-
-                for doc, range_pages in zip(docs, results):
-                    if isinstance(range_pages, Exception):
-                        raise range_pages
-
-                    new_tasks = [ExtractionTask(doc, p, self.lang)
-                                 for p in range_pages]
-                    tasks += new_tasks
-                    pbar.update(len(new_tasks))
-
-        return tasks
-
     @staticmethod
     def get_docs(input_dir):
         pdf_files = input_dir.rglob('*.pdf')
@@ -97,32 +72,38 @@ class TextExtraction:
 
         return out_path
 
+    def _get_savingpath(self, task, is_error=False):
+        output_path = self._get_output_path(task.doc)
+        name = f'{output_path.stem}_{task.page}.txt'
+
+        if is_error:
+            page = task.page if task.page != -1 else 'doc'
+            error_suffix = f'_{page}_error.log'
+
+            name = output_path.stem + error_suffix
+
+        return output_path.with_name(name)
+
     def _get_savinginfo(self, task_result):
         '''
         Saves the temporary results for each file and returns the path
         '''
         task, result, error = task_result
-        output_path = self._get_output_path(task.doc)
 
         text = None
         if result is not None:
-            name = f'{output_path.stem}_{task.page}.txt'
             text = result
             is_error = False
 
         elif error is not None:
-            page = task.page if task.page != -1 else 'doc'
-            error_suffix = f'_{page}_error.log'
-
-            name = output_path.stem + error_suffix
             text = error
             is_error = True
 
         else:
             raise RuntimeError("Processing failed and no errors detected!")
 
-        tmpfile = output_path.with_name(name)
-        return tmpfile, text, is_error
+        tmp_file = self._get_savingpath(task, is_error)
+        return tmp_file, text, is_error
 
     def _append_df(self, texts, errors):
         df = pd.DataFrame()
@@ -156,10 +137,72 @@ class TextExtraction:
         result, error = task.process()
         return task, result, error
 
+    def _gen_tasks(self, docs):
+        '''
+        Returns tasks to be processed.
+        For faulty documents, only the page -1 will be available
+        '''
+        # 10 because this is a fast operation
+        chunksize = max(1, (len(docs)/self.num_cpus)//10)
+
+        tasks = []
+        with tqdm(desc='Generating tasks', unit='tasks') as pbar:
+            with Pool() as pool:
+                results = pool.imap(
+                    self._list_pages, docs, chunksize=chunksize
+                )
+
+                for doc, range_pages in zip(docs, results):
+                    if isinstance(range_pages, Exception):
+                        raise range_pages
+
+                    new_tasks = [ExtractionTask(doc, p, self.lang)
+                                 for p in range_pages]
+                    tasks += new_tasks
+                    pbar.update(len(new_tasks))
+
+        return tasks
+
+    def _split_processed_tasks(self, tasks):
+        def get_taskinfo(task):
+            for is_error in (True, False):
+                filename = self._get_savingpath(task, is_error)
+
+                if filename.exists():
+                    text = filename.read_text()
+                    if is_error:
+                        return (task, None, text)  # TODO: Task result
+
+                    return (task, text, None)  # TODO: Task result
+
+            return None
+
+        processed, not_processed = [], []
+        for task in tasks:
+            tasks_result = get_taskinfo(task)
+
+            if tasks_result:
+                processed.append(tasks_result)
+            else:
+                not_processed.append(task)
+
+        return processed, not_processed
+
+    def _get_tasks(self, docs):
+        tasks = self._gen_tasks(docs)
+        processed, not_processed = self._split_processed_tasks(tasks)
+
+        logging.warn(
+            f"Skipping {len(processed)} already"
+            f" processed in folder '{self.tmp_dir}'"
+        )
+
+        return processed, not_processed
+
     def apply(self):
         pdf_files = self.get_docs(self.input_dir)
-        tasks = self.gen_tasks(pdf_files)
 
+        tasks = self._get_tasks(pdf_files)
         chunksize = max(1, (len(tasks)/self.num_cpus)//100)
 
         print('\n=== SUMMARY ===',
@@ -167,7 +210,7 @@ class TextExtraction:
               f'Results file: {self.results_file}',
               f'Using {self.num_cpus} CPU(s)',
               f'Chunksize: {chunksize} (calculated)',
-              f'Temporary directory: {self.tmp_dir}',
+              f'Temporary directory: {self.tmp_dir or "not used"}',
               sep='\n', end='\n\n')
 
         def get_bar(results):
@@ -179,12 +222,14 @@ class TextExtraction:
         # There can be many files to be saved, so, doing async
         with ThreadPoolExecutor() as thread_exe:
             thread_fs, texts, errors = [], [], []
+            processed, not_processed = tasks
 
             # TODO: skip already preprocessed on tmp
             with Pool() as pool:  # May be distributed
-                tasks_results = pool.imap_unordered(
-                    self._process_task, tasks, chunksize=chunksize
+                processing_tasks = pool.imap_unordered(
+                    self._process_task, not_processed, chunksize=chunksize
                 )
+                tasks_results = it.chain(processed, processing_tasks)
 
                 for task_result in get_bar(tasks_results):
 
