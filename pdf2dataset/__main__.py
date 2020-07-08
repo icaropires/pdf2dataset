@@ -20,6 +20,7 @@ def main():
     parser.add_argument(
         '--tmp-dir',
         type=str,
+        default='',
         help=('The folder to keep all the results, including log files and'
               ' intermediate files')
     )
@@ -34,13 +35,11 @@ def main():
     parser.add_argument(
         '--num-cpus',
         type=int,
-        default=None,
         help='Number of cpus to use'
     )
     parser.add_argument(
         '--address',
         type=str,
-        default=None,
         help='Ray address to connect'
     )
     parser.add_argument(

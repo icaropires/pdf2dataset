@@ -1,101 +1,40 @@
 #!/bin/env python3
 
-import tempfile
 import os
-import traceback
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import logging
 
 import pandas as pd
 import fastparquet
-import cv2
-import numpy as np
-from pdf2image import convert_from_path, pdfinfo_from_path
-from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
-import pytesseract
 import ray
 from ray.util.multiprocessing import Pool
 from tqdm import tqdm
 from pathlib import Path
+from pdf2image import pdfinfo_from_path
+from pdf2image.exceptions import PDFPageCountError
+
+from . extraction_task import ExtractionTask
 
 
 # TODO: Add typing
 
 
-class ExtractionTask:
-
-    def __init__(self, doc, page, lang='por'):
-        self.doc = doc
-        self.page = page
-        self.lang = lang
-
-    def ocr_image(self, img):
-        # So pytesseract uses only one core per worker
-        os.environ['OMP_THREAD_LIMIT'] = '1'
-
-        tsh = np.array(img.convert('L'))
-        tsh = cv2.adaptiveThreshold(
-            tsh, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            97, 50
-        )
-
-        erd = cv2.erode(
-            tsh,
-            cv2.getStructuringElement(cv2.MORPH_CROSS, (2, 2)),
-            iterations=1
-        )
-
-        return pytesseract.image_to_string(erd, lang=self.lang)
-
-    def get_page_img(self):
-        img = convert_from_path(
-            self.doc,
-            first_page=self.page,
-            single_file=True,
-            size=(None, 1100),
-            fmt='jpeg'
-        )
-
-        return img[0]
-
-    def process(self):
-        text, error = None, None
-
-        # Ray can handle the exceptions, but this makes switching to
-        #   multiprocessing easy
-        try:
-            img = self.get_page_img()
-
-            # TODO: Use OCR?
-            text = self.ocr_image(img)
-
-        except (PDFPageCountError, PDFSyntaxError):
-            error = traceback.format_exc()
-
-        return text, error
-
-
 class TextExtraction:
     def __init__(
         self, input_dir, results_file, *,
-        tmp_dir=None, lang='por', **kwargs
+        tmp_dir='', lang='por', **kwargs
     ):
         self.input_dir = Path(input_dir).resolve()
         self.results_file = Path(results_file).resolve()
-
         assert self.input_dir.is_dir()
+
+        # Keep str and not Path, custom behaviour if is empty
+        self.tmp_dir = tmp_dir
 
         if self.results_file.exists():
             logging.warn(f'{results_file} already exists!'
                          ' Results will be appended to it!')
-
-        if tmp_dir:
-            self.tmp_dir = Path(tmp_dir).resolve()
-        else:
-            self.tmp_dir = Path(tempfile.mkdtemp())
 
         self.lang = lang
 
@@ -151,9 +90,9 @@ class TextExtraction:
         # Here feedback is better than keeping use of the generator
         return list(tqdm(pdf_files, desc='Looking for files', unit='docs'))
 
-    def get_output_path(self, doc_path):
+    def _get_output_path(self, doc_path):
         relative = doc_path.relative_to(self.input_dir)
-        out_path = self.tmp_dir / relative
+        out_path = Path(self.tmp_dir) / relative
         out_path.parent.mkdir(parents=True, exist_ok=True)  # Side effect
 
         return out_path
@@ -163,7 +102,7 @@ class TextExtraction:
         Saves the temporary results for each file and returns the path
         '''
         task, result, error = task_result
-        output_path = self.get_output_path(task.doc)
+        output_path = self._get_output_path(task.doc)
 
         text = None
         if result is not None:
@@ -259,9 +198,10 @@ class TextExtraction:
                     else:
                         errors.append((path, text))
 
-                    thread_fs.append(
-                        thread_exe.submit(path.write_text, text)
-                    )
+                    if self.tmp_dir:
+                        thread_fs.append(
+                            thread_exe.submit(path.write_text, text)
+                        )
 
                     if len(texts) + len(errors) >= self._chunk_df_size:
                         # Persist to disk, aiming large amount of data
