@@ -15,13 +15,18 @@ from pathlib import Path
 from pdf2image import pdfinfo_from_path
 from pdf2image.exceptions import PDFPageCountError
 
-from . extraction_task import ExtractionTask
+from .extraction_task import ExtractionTask
 
 
 # TODO: Add typing
+# TODO: Move some methods other class/file
 
 
 class TextExtraction:
+    _filepath_pat = (
+        r'((?P<path>.+)_(?P<page>(-?\d+|doc))(.txt|_error.log))'
+    )
+
     def __init__(
         self, input_dir, results_file, *,
         tmp_dir='', lang='por', **kwargs

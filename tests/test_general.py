@@ -1,3 +1,6 @@
+import re
+
+import pytest
 import pandas as pd
 from pdf2dataset import TextExtraction
 
@@ -64,3 +67,19 @@ def test_tmpdir(tmp_path, tmpdir):
 
     for f in tmp_files:
         assert f.basename in expected_files
+
+
+@pytest.mark.parametrize('path,expected', (
+    ('multi_page1_1.txt', {'path': 'multi_page1', 'page': '1'}),
+    ('multi_page1_2.txt', {'path': 'multi_page1', 'page': '2'}),
+    ('multi_page1_3.txt', {'path': 'multi_page1', 'page': '3'}),
+    ('multi_page1_10.txt', {'path': 'multi_page1', 'page': '10'}),
+    ('multi_page1_101.txt', {'path': 'multi_page1', 'page': '101'}),
+    ('single_page1_1.txt', {'path': 'single_page1', 'page': '1'}),
+    ('invalid1_doc_error.log', {'path': 'invalid1', 'page': 'doc'}),
+    ('invalid1_-1_error.log', {'path': 'invalid1', 'page': '-1'}),
+    ('invalid1_10_error.log', {'path': 'invalid1', 'page': '10'}),
+))
+def test_regex_extract(path, expected):
+    result = re.match(TextExtraction._filepath_pat, path)
+    assert result.groupdict() == expected
