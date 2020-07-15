@@ -81,4 +81,10 @@ optional arguments:
 
 ### Sample output
 
+``` python
+import pandas as pd
+
+df = pd.read_parquet('my_df.parquet.gzip')
+print(df)
+```
 ![output_sample](./images/output_sample.png)
