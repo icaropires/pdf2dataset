@@ -23,9 +23,7 @@ from .extraction_task import ExtractionTask
 
 
 class TextExtraction:
-    _filepath_pat = (
-        r'((?P<path>.+)_(?P<page>(-?\d+|doc))(.txt|_error.log))'
-    )
+    _path_pat = r'((?P<path>.+)_(?P<page>(-?\d+|doc))(.txt|_error.log))'
 
     def __init__(
         self, input_dir, results_file, *,
@@ -82,8 +80,9 @@ class TextExtraction:
         name = f'{output_path.stem}_{task.page}.txt'
 
         if is_error:
-            page = task.page if task.page != -1 else 'doc'
-            error_suffix = f'_{page}_error.log'
+            # Commented to keep int16 instead of str
+            # page = task.page if task.page != -1 else 'doc'
+            error_suffix = f'_{task.page}_error.log'
 
             name = output_path.stem + error_suffix
 
@@ -110,6 +109,15 @@ class TextExtraction:
         tmp_file = self._get_savingpath(task, is_error)
         return tmp_file, text, is_error
 
+    @staticmethod
+    def _preprocess_path(df):  # Side-effect
+        parsed = df['path'].str.extract(TextExtraction._path_pat)
+
+        df['page'] = parsed['page'].astype('int16')
+        df['path'] = parsed['path'] + '.pdf'
+
+        return df
+
     def _append_df(self, texts, errors):
         df = pd.DataFrame()
 
@@ -127,6 +135,9 @@ class TextExtraction:
                     {'path': path, 'text': '', 'error': errors}, dtype='str'
                 ),
             ])
+
+        df = self._preprocess_path(df)
+        df = df[['path', 'page', 'text', 'error']]
 
         with self._df_lock:
             fastparquet.write(

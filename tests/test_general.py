@@ -12,38 +12,28 @@ def test_general(tmp_path):
     extraction.apply()
 
     df = pd.read_parquet(result_path, engine='fastparquet')
-    assert df.shape == (5, 3)
+    assert df.shape == (5, 4)
 
-    df = df.set_index('path')
-    texts_result = df['text'].to_dict().items()
+    rows = sorted([r[1:] for r in df.itertuples()])
 
-    texts_expected = [
-        ('multi_page1_1.txt', 'First page'),
-        ('multi_page1_2.txt', 'Second page'),
-        ('multi_page1_3.txt', 'Third page'),
-        ('single_page1_1.txt', 'My beautiful sample!'),
-        ('invalid1_doc_error.log', '')
-    ]
+    # Error as boolean just for testing
+    expected = sorted([
+        ('multi_page1.pdf', 1, 'First page', False),
+        ('multi_page1.pdf', 2, 'Second page', False),
+        ('multi_page1.pdf', 3, 'Third page', False),
+        ('single_page1.pdf', 1, 'My beautiful sample!', False),
+        ('invalid1.pdf', -1, '', True)
+    ])
 
-    for te in texts_expected:
-        assert te in texts_result
+    for idx, r in enumerate(rows):
+        *other, error = r
+        assert tuple(other) == expected[idx][:-1]
 
-    errors_result = df['error'].to_dict()
-
-    errors_expected = [
-        ('multi_page1_1.txt', False),
-        ('multi_page1_2.txt', False),
-        ('multi_page1_3.txt', False),
-        ('single_page1_1.txt', False),
-        ('invalid1_doc_error.log', True)
-    ]
-
-    for doc, has_error in errors_expected:
-        error_msg = errors_result[doc]
-        assert bool(error_msg) == has_error
+        has_error = expected[idx][-1]
+        assert bool(error) == has_error
 
         if has_error:
-            assert 'Traceback' in error_msg
+            assert 'Traceback' in error
 
 
 def test_tmpdir(tmp_path, tmpdir):
@@ -59,7 +49,7 @@ def test_tmpdir(tmp_path, tmpdir):
         ('multi_page1_2.txt'),
         ('multi_page1_3.txt'),
         ('single_page1_1.txt'),
-        ('invalid1_doc_error.log')
+        ('invalid1_-1_error.log')  # -1 is the whole document
     ]
 
     tmp_files = tmp_dir.listdir()
@@ -77,9 +67,9 @@ def test_tmpdir(tmp_path, tmpdir):
     ('multi_page1_101.txt', {'path': 'multi_page1', 'page': '101'}),
     ('single_page1_1.txt', {'path': 'single_page1', 'page': '1'}),
     ('invalid1_doc_error.log', {'path': 'invalid1', 'page': 'doc'}),
-    ('invalid1_-1_error.log', {'path': 'invalid1', 'page': '-1'}),
+    ('invalid1_-10_error.log', {'path': 'invalid1', 'page': '-10'}),
     ('invalid1_10_error.log', {'path': 'invalid1', 'page': '10'}),
 ))
 def test_regex_extract(path, expected):
-    result = re.match(TextExtraction._filepath_pat, path)
+    result = re.match(TextExtraction._path_pat, path)
     assert result.groupdict() == expected
