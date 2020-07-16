@@ -16,15 +16,21 @@ Converts a whole subdirectory with big volume of PDF documents to a dataset (pan
 * Custom behaviour through parameters (number of CPUs, text language, etc)
 
 
-## Install
+## Installation
 
 ### Install Dependencies
+
+#### Fedora
+
+``` bash
+$ sudo dnf install -y poppler-utils tesseract-langpack-por  # "-por" for portuguese, use the docs language
+```
 
 #### Ubuntu (or debians)
 
 ``` bash
 $ sudo apt update
-$ sudo apt install -y poppler-utils tesseract-ocr-por  # "-por" for portuguese, use your language
+$ sudo apt install -y poppler-utils tesseract-ocr-por  # "-por" for portuguese, use the docs language
 ```
 
 ### Install pdf2dataset
@@ -34,7 +40,6 @@ $ sudo apt install -y poppler-utils tesseract-ocr-por  # "-por" for portuguese, 
 ``` bash
 $ pip3 install pdf2dataset --user # Please, isolate the environment
 ```
-
 
 #### For development
 
@@ -92,6 +97,20 @@ the whole data in memory.
 
 The `-1` page number means that was not possible of even openning the document.
 
+### Run on a Cluster
+
+#### Setup the Cluster
+
+Follow ray documentation for [manual](https://docs.ray.io/en/latest/using-ray-on-a-cluster.html?setup#manual-cluster-setup) or [automatic](https://docs.ray.io/en/latest/autoscaling.html?setup#automatic-cluster-setup)
+setup.
+
+#### Run it
+
+To go distributed you can run it just like local, but using the `--address` and `--redis-password` flags to point to your cluster ([More information](https://docs.ray.io/en/latest/multiprocessing.html)).
+
+A shared remote volume can also be handy to share the documents between the nodes, **all nodes must have access to the documents using the same path**, just
+google something like "setup nfs server" to get more instructions.
+
 ### Help
 
 ``` bash
@@ -125,5 +144,9 @@ optional arguments:
 
 1. **Troubles with high memory usage**
 
-You can try to decrease the number of CPUs in use, reducing the level of
-parallelism, test with `--num-cpus 1` flag and then increasy according to your hardware.
+You can try to decrease the number of CPUs in use, reducing the level of parallelism,
+test it with `--num-cpus 1` flag and then increase according to your hardware.
+
+## How to Contribute
+
+Just open your [issues](https://github.com/icaropires/pdf2dataset/issues) and/or [pull requests](https://github.com/icaropires/pdf2dataset/pulls), all are welcome :smiley:!
