@@ -1,4 +1,5 @@
 import re
+from pathlib import Path
 
 import pytest
 import pandas as pd
@@ -12,7 +13,7 @@ def test_general(tmp_path):
     extraction.apply()
 
     df = pd.read_parquet(result_path, engine='fastparquet')
-    assert df.shape == (5, 4)
+    assert df.shape == (9, 4)
 
     rows = sorted([r[1:] for r in df.itertuples()])
 
@@ -21,7 +22,11 @@ def test_general(tmp_path):
         ('multi_page1.pdf', 1, 'First page', False),
         ('multi_page1.pdf', 2, 'Second page', False),
         ('multi_page1.pdf', 3, 'Third page', False),
+        ('sub1/copy_multi_page1.pdf', 1, 'First page', False),
+        ('sub1/copy_multi_page1.pdf', 2, 'Second page', False),
+        ('sub1/copy_multi_page1.pdf', 3, 'Third page', False),
         ('single_page1.pdf', 1, 'My beautiful sample!', False),
+        ('sub2/copy_single_page1.pdf', 1, 'My beautiful sample!', False),
         ('invalid1.pdf', -1, '', True)
     ])
 
@@ -38,7 +43,7 @@ def test_general(tmp_path):
 
 def test_tmpdir(tmp_path, tmpdir):
     result_path = tmp_path / 'result.parquet.gzip'
-    tmp_dir = tmpdir.mkdir('tmp')
+    tmp_dir = Path(tmpdir.mkdir('tmp'))
 
     extraction = TextExtraction('tests/samples', result_path,
                                 tmp_dir=tmp_dir, lang='eng')
@@ -48,15 +53,22 @@ def test_tmpdir(tmp_path, tmpdir):
         ('multi_page1_1.txt'),
         ('multi_page1_2.txt'),
         ('multi_page1_3.txt'),
+        ('sub1'),
+        ('sub1/copy_multi_page1_1.txt'),
+        ('sub1/copy_multi_page1_2.txt'),
+        ('sub1/copy_multi_page1_3.txt'),
         ('single_page1_1.txt'),
+        ('sub2'),
+        ('sub2/copy_single_page1_1.txt'),
         ('invalid1_-1_error.log')  # -1 is the whole document
     ]
 
-    tmp_files = tmp_dir.listdir()
-    assert len(tmp_files) == 5
+    tmp_files = list(tmp_dir.rglob('*'))
+    assert len(tmp_files) == 11
 
     for f in tmp_files:
-        assert f.basename in expected_files
+        f = str(f.relative_to(tmp_dir))
+        assert f in expected_files
 
 
 @pytest.mark.parametrize('path,expected', (
@@ -65,6 +77,8 @@ def test_tmpdir(tmp_path, tmpdir):
     ('multi_page1_3.txt', {'path': 'multi_page1', 'page': '3'}),
     ('multi_page1_10.txt', {'path': 'multi_page1', 'page': '10'}),
     ('multi_page1_101.txt', {'path': 'multi_page1', 'page': '101'}),
+    ('sub1/multi_page1_100.txt', {'path': 'sub1/multi_page1', 'page': '100'}),
+    ('s1/s2/doc_1000.txt', {'path': 's1/s2/doc', 'page': '1000'}),
     ('single_page1_1.txt', {'path': 'single_page1', 'page': '1'}),
     ('invalid1_doc_error.log', {'path': 'invalid1', 'page': 'doc'}),
     ('invalid1_-10_error.log', {'path': 'invalid1', 'page': '-10'}),

@@ -20,6 +20,9 @@ from .extraction_task import ExtractionTask
 
 # TODO: Add typing
 # TODO: Move some methods other class/file
+# TODO: Set up a logger to the class
+# TODO: Substitute most (all?) prints for logs
+# TODO: Create a task result namedtuple
 
 
 class TextExtraction:
@@ -36,10 +39,6 @@ class TextExtraction:
         # Keep str and not Path, custom behaviour if is empty
         self.tmp_dir = tmp_dir
 
-        if self.results_file.exists():
-            logging.warn(f'{results_file} already exists!'
-                         ' Results will be appended to it!')
-
         self.lang = lang
 
         self._df_lock = threading.Lock()
@@ -50,6 +49,11 @@ class TextExtraction:
 
         self.num_cpus = kwargs.get('num_cpus', None)
         self.num_cpus = self.num_cpus or os.cpu_count()
+
+        # Warning after the ray.init logging
+        if self.results_file.exists():
+            logging.warning(f'{results_file} already exists!'
+                            ' Results will be appended to it!')
 
     @staticmethod
     def _list_pages(d):
@@ -71,7 +75,9 @@ class TextExtraction:
     def _get_output_path(self, doc_path):
         relative = doc_path.relative_to(self.input_dir)
         out_path = Path(self.tmp_dir) / relative
-        out_path.parent.mkdir(parents=True, exist_ok=True)  # Side effect
+
+        if self.tmp_dir:
+            out_path.parent.mkdir(parents=True, exist_ok=True)  # Side effect
 
         return out_path
 
@@ -208,10 +214,11 @@ class TextExtraction:
         tasks = self._gen_tasks(docs)
         processed, not_processed = self._split_processed_tasks(tasks)
 
-        logging.warn(
-            f"Skipping {len(processed)} already"
-            f" processed in folder '{self.tmp_dir}'"
-        )
+        if len(processed):
+            logging.warning(
+                f"Skipping {len(processed)} already"
+                f" processed pages in directory '{self.tmp_dir}'"
+            )
 
         return processed, not_processed
 
@@ -240,7 +247,6 @@ class TextExtraction:
             thread_fs, texts, errors = [], [], []
             processed, not_processed = tasks
 
-            # TODO: skip already preprocessed on tmp
             with Pool() as pool:  # May be distributed
                 processing_tasks = pool.imap_unordered(
                     self._process_task, not_processed, chunksize=chunksize
