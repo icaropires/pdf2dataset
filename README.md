@@ -10,7 +10,7 @@ Converts a whole subdirectory with big volume of PDF documents to a dataset (pan
 * Conversion of a whole subdirectory with PDFs documents into a pandas DataFrame
 * Support for parallel and distributed computing through [ray](https://github.com/ray-project/ray)
 * Incremental writing of resulting DataFrame, to save memory
-* Ability to keep processing progress and resume from it
+* Ability to save processing progress and resume from it
 * Error tracking of faulty documents
 * Use OCR for extracting text through [pytesseract](https://github.com/madmaze/pytesseract) and [pdf2image](https://github.com/Belval/pdf2image)
 * Custom behaviour through parameters (number of CPUs, text language, etc)
@@ -53,13 +53,18 @@ $ poetry install
 $ pdf2dataset my_pdfs_folder my_df.parquet.gzip
 ```
 
-### Keeping progress
+### Save Processing Progress
+
+It's possible to save the progress to a temporary folder and resume from the saved state in case of
+any error or interruption. To resume the processing, just use the `--tmp-dir [directory]` flag:
 
 ``` bash
-# Keep progress in tmp folder, so can resume processing in case of any error or interruption
-# To resume, just use the same --tmp-dir folder
 $ pdf2dataset my_pdfs_folder my_df.parquet.gzip --tmp-dir my_progress
 ```
+
+The indicated temporary directory can also be used for debugging pourposes and **is not** deleted
+automatically, so delete it when desired. 
+
 ### Results File
 
 The resulting "file" is a parquet hive written with [fastparquet](https://github.com/dask/fastparquet), it can be
