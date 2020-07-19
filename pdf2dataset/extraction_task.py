@@ -4,16 +4,18 @@ import traceback
 import numpy as np
 import pytesseract
 import cv2
+import pdftotext
 from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 
 
 class ExtractionTask:
 
-    def __init__(self, doc, page, lang='por'):
+    def __init__(self, doc, page, lang='por', ocr=False):
         self.doc = doc
         self.page = page
         self.lang = lang
+        self.ocr = ocr
 
     def ocr_image(self, img):
         # So pytesseract uses only one core per worker
@@ -46,18 +48,31 @@ class ExtractionTask:
 
         return img[0]
 
-    def process(self):
+    def _process_ocr(self):
         text, error = None, None
 
-        # Ray can handle the exceptions, but this makes switching to
-        #   multiprocessing easy
         try:
             img = self.get_page_img()
-
-            # TODO: Use OCR?
             text = self.ocr_image(img)
-
         except (PDFPageCountError, PDFSyntaxError):
             error = traceback.format_exc()
 
         return text, error
+
+    def _process_native(self):
+        text, error = None, None
+
+        # TODO: fix processing the whole doc for each page
+        try:
+            with self.doc.open('rb') as f:
+                text = pdftotext.PDF(f)[self.page-1]
+        except pdftotext.Error:
+            error = traceback.format_exc()
+
+        return text, error
+
+    def process(self):
+        if self.ocr:
+            return self._process_ocr()
+
+        return self._process_native()

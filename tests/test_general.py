@@ -6,10 +6,15 @@ import pandas as pd
 from pdf2dataset import TextExtraction
 
 
-def test_general(tmp_path):
+@pytest.mark.parametrize('use_ocr', (
+    True,
+    False,
+))
+def test_general(tmp_path, use_ocr):
     result_path = tmp_path / 'result.parquet.gzip'
 
-    extraction = TextExtraction('tests/samples', result_path, lang='eng')
+    extraction = TextExtraction('tests/samples', result_path,
+                                lang='eng', ocr=use_ocr)
     extraction.apply()
 
     df = pd.read_parquet(result_path, engine='fastparquet')
@@ -40,13 +45,20 @@ def test_general(tmp_path):
         if has_error:
             assert 'Traceback' in error
 
+            pdftotext_error_msg = 'poppler error creating document'
+            assert (pdftotext_error_msg in error) != use_ocr
 
-def test_tmpdir(tmp_path, tmpdir):
+
+@pytest.mark.parametrize('use_ocr', (
+    True,
+    False,
+))
+def test_tmpdir(tmp_path, tmpdir, use_ocr):
     result_path = tmp_path / 'result.parquet.gzip'
     tmp_dir = Path(tmpdir.mkdir('tmp'))
 
     extraction = TextExtraction('tests/samples', result_path,
-                                tmp_dir=tmp_dir, lang='eng')
+                                tmp_dir=tmp_dir, lang='eng', ocr=use_ocr)
     extraction.apply()
 
     expected_files = [

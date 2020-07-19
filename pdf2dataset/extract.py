@@ -10,10 +10,10 @@ import pandas as pd
 import fastparquet
 import ray
 from ray.util.multiprocessing import Pool
+from ray.util.multiprocessing.pool import PoolTaskError
 from tqdm import tqdm
 from pathlib import Path
-from pdf2image import pdfinfo_from_path
-from pdf2image.exceptions import PDFPageCountError
+import pdftotext
 
 from .extraction_task import ExtractionTask
 
@@ -30,7 +30,7 @@ class TextExtraction:
 
     def __init__(
         self, input_dir, results_file, *,
-        tmp_dir='', lang='por', **kwargs
+        tmp_dir='', lang='por', ocr=False, **kwargs
     ):
         self.input_dir = Path(input_dir).resolve()
         self.results_file = Path(results_file).resolve()
@@ -40,6 +40,7 @@ class TextExtraction:
         self.tmp_dir = tmp_dir
 
         self.lang = lang
+        self.ocr = ocr
 
         self._df_lock = threading.Lock()
         self._chunk_df_size = 10000  # Dask default
@@ -54,16 +55,6 @@ class TextExtraction:
         if self.results_file.exists():
             logging.warning(f'{results_file} already exists!'
                             ' Results will be appended to it!')
-
-    @staticmethod
-    def _list_pages(d):
-        try:
-            num_pages = pdfinfo_from_path(d)['Pages']
-            pages = range(1, num_pages+1)
-        except PDFPageCountError:
-            pages = [-1]  # Handled when processing
-
-        return pages
 
     @staticmethod
     def get_docs(input_dir):
@@ -89,7 +80,6 @@ class TextExtraction:
             # Commented to keep int16 instead of str
             # page = task.page if task.page != -1 else 'doc'
             error_suffix = f'_{task.page}_error.log'
-
             name = output_path.stem + error_suffix
 
         return output_path.with_name(name)
@@ -159,6 +149,21 @@ class TextExtraction:
         result, error = task.process()
         return task, result, error
 
+    @staticmethod
+    def _list_pages(doc):
+        # Using pdftotext to get num_pages because it's the best way I know
+        # pdftotext extracts lazy, so this won't process the text
+
+        try:
+            with doc.open('rb') as f:
+                num_pages = len(pdftotext.PDF(f))
+
+            pages = range(1, num_pages+1)
+        except pdftotext.Error:
+            pages = [-1]
+
+        return pages
+
     def _gen_tasks(self, docs):
         '''
         Returns tasks to be processed.
@@ -175,13 +180,13 @@ class TextExtraction:
                 )
 
                 for doc, range_pages in zip(docs, results):
-                    if isinstance(range_pages, Exception):
-                        raise range_pages
+                    if isinstance(range_pages, PoolTaskError):
+                        raise range_pages.underlying
 
-                    new_tasks = [ExtractionTask(doc, p, self.lang)
+                    new_tasks = [ExtractionTask(doc, p, self.lang, self.ocr)
                                  for p in range_pages]
                     tasks += new_tasks
-                    pbar.update(len(new_tasks))
+                    pbar.update(len(range_pages))
 
         return tasks
 
@@ -255,8 +260,8 @@ class TextExtraction:
 
                 for task_result in get_bar(tasks_results):
 
-                    if isinstance(task_result, Exception):
-                        raise task_result
+                    if isinstance(task_result, PoolTaskError):
+                        raise task_result.underlying
 
                     path, text, is_error = self._get_savinginfo(task_result)
 

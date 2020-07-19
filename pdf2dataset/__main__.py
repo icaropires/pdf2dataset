@@ -30,6 +30,12 @@ def main():
         default='por',
         help='Tesseract language'
     )
+    parser.add_argument(
+        '--ocr',
+        type=bool,
+        default=False,
+        help="'pytesseract' if true, else 'pdftotext'. default: false"
+    )
 
     # Ray
     parser.add_argument(

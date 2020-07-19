@@ -12,7 +12,8 @@ Converts a whole subdirectory with big volume of PDF documents to a dataset (pan
 * Incremental writing of resulting DataFrame, to save memory
 * Ability to save processing progress and resume from it
 * Error tracking of faulty documents
-* Use OCR for extracting text through [pytesseract](https://github.com/madmaze/pytesseract) and [pdf2image](https://github.com/Belval/pdf2image)
+* Ability to extracting text through [pdftotext](https://github.com/jalan/pdftotext)
+* Ability to use OCR for extracting text through [pytesseract](https://github.com/madmaze/pytesseract) and [pdf2image](https://github.com/Belval/pdf2image)
 * Custom behaviour through parameters (number of CPUs, text language, etc)
 
 
@@ -23,14 +24,17 @@ Converts a whole subdirectory with big volume of PDF documents to a dataset (pan
 #### Fedora
 
 ``` bash
-$ sudo dnf install -y poppler-utils tesseract-langpack-por  # "-por" for portuguese, use the docs language
+# "-por" for portuguese, use the documents language
+$ sudo dnf install -y poppler-utils pkgconfig poppler-cpp-devel python3-devel tesseract-langpack-por
 ```
 
 #### Ubuntu (or debians)
 
 ``` bash
 $ sudo apt update
-$ sudo apt install -y poppler-utils tesseract-ocr-por  # "-por" for portuguese, use the docs language
+
+# "-por" for portuguese, use the documents language
+$ sudo apt install -y poppler-utils build-essential libpoppler-cpp-dev pkg-config python3-dev tesseract-ocr-por
 ```
 
 ### Install pdf2dataset
@@ -113,9 +117,9 @@ google something like "setup nfs server" to get more instructions.
 
 ### Help
 
-``` bash
+```
 $ pdf2dataset -h
-usage: pdf2dataset [-h] [--tmp-dir TMP_DIR] [--lang LANG]
+usage: pdf2dataset [-h] [--tmp-dir TMP_DIR] [--lang LANG] [--ocr OCR]
                    [--num-cpus NUM_CPUS] [--address ADDRESS]
                    [--webui-host WEBUI_HOST] [--redis-password REDIS_PASSWORD]
                    input_dir results_file
@@ -131,6 +135,8 @@ optional arguments:
   --tmp-dir TMP_DIR     The folder to keep all the results, including log
                         files and intermediate files
   --lang LANG           Tesseract language
+  --ocr OCR             'pytesseract' if true, else 'pdftotext'. default:
+                        false
   --num-cpus NUM_CPUS   Number of cpus to use
   --address ADDRESS     Ray address to connect
   --webui-host WEBUI_HOST
