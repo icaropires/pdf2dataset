@@ -246,12 +246,6 @@ class TextExtraction:
               f'Temporary directory: {self.tmp_dir or "not used"}',
               sep='\n', end='\n\n')
 
-        def get_bar(results):
-            return tqdm(
-                results, total=len(tasks), desc='Processing pages',
-                unit='pages', dynamic_ncols=True
-            )
-
         # There can be many files to be saved, so, doing async
         with ThreadPoolExecutor() as thread_exe:
             thread_fs, texts, errors = [], [], []
@@ -263,8 +257,10 @@ class TextExtraction:
                 )
                 tasks_results = it.chain(processed, processing_tasks)
 
-                for task_result in get_bar(tasks_results):
-
+                for task_result in tqdm(
+                    tasks_results, total=len(processed) + len(not_processed),
+                    desc='Processing pages', unit='pages', dynamic_ncols=True
+                ):
                     if isinstance(task_result, PoolTaskError):
                         raise task_result.underlying
 
