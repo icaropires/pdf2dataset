@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 import pandas as pd
-from pdf2dataset import TextExtraction
+from pdf2dataset import TextExtraction, extract_text
 
 
 @pytest.mark.parametrize('use_ocr', (
@@ -13,9 +13,7 @@ from pdf2dataset import TextExtraction
 def test_general(tmp_path, use_ocr):
     result_path = tmp_path / 'result.parquet.gzip'
 
-    extraction = TextExtraction('tests/samples', result_path,
-                                lang='eng', ocr=use_ocr)
-    extraction.apply()
+    extract_text('tests/samples', result_path, lang='eng', ocr=use_ocr)
 
     df = pd.read_parquet(result_path, engine='fastparquet')
     assert df.shape == (9, 4)
@@ -57,9 +55,8 @@ def test_tmpdir(tmp_path, tmpdir, use_ocr):
     result_path = tmp_path / 'result.parquet.gzip'
     tmp_dir = Path(tmpdir.mkdir('tmp'))
 
-    extraction = TextExtraction('tests/samples', result_path,
-                                tmp_dir=tmp_dir, lang='eng', ocr=use_ocr)
-    extraction.apply()
+    extract_text('tests/samples', result_path, tmp_dir=tmp_dir,
+                 lang='eng', ocr=use_ocr)
 
     expected_files = [
         ('multi_page1_1.txt'),

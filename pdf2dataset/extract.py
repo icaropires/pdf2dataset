@@ -290,3 +290,8 @@ class TextExtraction:
 
             for f in thread_fs:  # Avoid fail silently
                 f.result()
+
+
+def extract_text(*args, **kwargs):
+    extraction = TextExtraction(*args, **kwargs)
+    return extraction.apply()
