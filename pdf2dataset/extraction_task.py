@@ -1,3 +1,4 @@
+import io
 import os
 import traceback
 
@@ -5,14 +6,15 @@ import numpy as np
 import pytesseract
 import cv2
 import pdftotext
-from pdf2image import convert_from_path
+from pdf2image import convert_from_bytes
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 
 
 class ExtractionTask:
 
-    def __init__(self, doc, page, lang='por', ocr=False):
+    def __init__(self, doc, doc_bin, page, lang='por', ocr=False):
         self.doc = doc
+        self.doc_bin = doc_bin
         self.page = page
         self.lang = lang
         self.ocr = ocr
@@ -38,8 +40,8 @@ class ExtractionTask:
         return pytesseract.image_to_string(erd, lang=self.lang)
 
     def get_page_img(self):
-        img = convert_from_path(
-            self.doc,
+        img = convert_from_bytes(
+            self.doc_bin,
             first_page=self.page,
             single_file=True,
             size=(None, 1100),
@@ -62,9 +64,8 @@ class ExtractionTask:
     def _process_native(self):
         text, error = None, None
 
-        # TODO: fix processing the whole doc for each page
         try:
-            with self.doc.open('rb') as f:
+            with io.BytesIO(self.doc_bin) as f:
                 text = pdftotext.PDF(f)[self.page-1]
         except pdftotext.Error:
             error = traceback.format_exc()

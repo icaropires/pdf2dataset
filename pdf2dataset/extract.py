@@ -100,7 +100,9 @@ class TextExtraction:
             is_error = True
 
         else:
-            raise RuntimeError("Processing failed and no errors detected!")
+            raise RuntimeError(
+                "Processing failed and no errors were detected!"
+            )
 
         tmp_file = self._get_savingpath(task, is_error)
         return tmp_file, text, is_error
@@ -183,10 +185,13 @@ class TextExtraction:
                     if isinstance(range_pages, PoolTaskError):
                         raise range_pages.underlying
 
-                    new_tasks = [ExtractionTask(doc, p, self.lang, self.ocr)
-                                 for p in range_pages]
+                    new_tasks = [
+                        ExtractionTask(doc, doc.read_bytes(), p,
+                                       self.lang, self.ocr)
+                        for p in range_pages
+                    ]
                     tasks += new_tasks
-                    pbar.update(len(range_pages))
+                    pbar.update(len(new_tasks))
 
         return tasks
 

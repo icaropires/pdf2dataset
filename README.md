@@ -112,8 +112,7 @@ setup.
 
 To go distributed you can run it just like local, but using the `--address` and `--redis-password` flags to point to your cluster ([More information](https://docs.ray.io/en/latest/multiprocessing.html)).
 
-A shared remote volume can also be handy to share the documents between the nodes, **all nodes must have access to the documents using the same path**, just
-google something like "setup nfs server" to get more instructions.
+With version >= 0.1.2, only the head node needs to have access to documents in disk.
 
 ### Help
 
