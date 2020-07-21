@@ -59,7 +59,10 @@ $ poetry install
 
 ``` bash
 # Reads all PDFs from my_pdfs_folder and saves the resultant dataframe to my_df.parquet.gzip
-$ pdf2dataset my_pdfs_folder my_df.parquet.gzip
+$ pdf2dataset my_pdfs_folder my_df.parquet.gzip  # Most basic
+$ pdf2dataset my_pdfs_folder my_df.parquet.gzip --num-cpus 1  # Reduce parallelism to the maximum
+$ pdf2dataset my_pdfs_folder my_df.parquet.gzip --ocr true  # For scanned PDFs
+$ pdf2dataset my_pdfs_folder my_df.parquet.gzip --ocr true --lang eng  # Scanned documents with english text
 ```
 
 ### Save Processing Progress - CLI
