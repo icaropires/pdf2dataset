@@ -2,7 +2,7 @@
 
 ![pdf2dataset](https://github.com/icaropires/pdf2dataset/workflows/pdf2dataset/badge.svg)
 
-Converts a whole subdirectory with big volume of PDF documents to a dataset (pandas DataFrame) with the columns: path x page x text x error
+Converts a whole subdirectory with big a volume of PDF documents to a dataset (pandas DataFrame) with the columns: path x page x text x error
 
 
 ## Highlights
@@ -14,7 +14,7 @@ Converts a whole subdirectory with big volume of PDF documents to a dataset (pan
 * Error tracking of faulty documents
 * Ability to extracting text through [pdftotext](https://github.com/jalan/pdftotext)
 * Ability to use OCR for extracting text through [pytesseract](https://github.com/madmaze/pytesseract) and [pdf2image](https://github.com/Belval/pdf2image)
-* Custom behaviour through parameters (number of CPUs, text language, etc)
+* Custom behavior through parameters (number of CPUs, text language, etc)
 
 
 ## Installation
@@ -42,7 +42,7 @@ $ sudo apt install -y poppler-utils build-essential libpoppler-cpp-dev pkg-confi
 #### For usage
 
 ``` bash
-$ pip3 install pdf2dataset --user # Please, isolate the environment
+$ pip3 install pdf2dataset --user  # Please, isolate the environment
 ```
 
 #### For development
@@ -55,14 +55,14 @@ $ poetry install
 
 ## Usage
 
-### Simple
+### Simple - CLI
 
 ``` bash
 # Reads all PDFs from my_pdfs_folder and saves the resultant dataframe to my_df.parquet.gzip
 $ pdf2dataset my_pdfs_folder my_df.parquet.gzip
 ```
 
-### Save Processing Progress
+### Save Processing Progress - CLI
 
 It's possible to save the progress to a temporary folder and resume from the saved state in case of
 any error or interruption. To resume the processing, just use the `--tmp-dir [directory]` flag:
@@ -71,9 +71,39 @@ any error or interruption. To resume the processing, just use the `--tmp-dir [di
 $ pdf2dataset my_pdfs_folder my_df.parquet.gzip --tmp-dir my_progress
 ```
 
-The indicated temporary directory can also be used for debugging pourposes and **is not** deleted
+The indicated temporary directory can also be used for debugging purposes and **is not** deleted
 automatically, so delete it when desired. 
 
+
+### Using as a library
+
+The `extract_text` function can be used analogously to the CLI:
+
+``` python
+from pdf2dataset import extract_text
+
+extract_text('my_pdfs_folder', 'my_df.parquet.gzip', tmp_dir='my_progress')
+```
+
+#### Small
+
+One feature not available to the CLI is the custom behavior for handling small volumes of data (small can
+be understood as that the extraction won't run for hours or days and locally).
+
+The complete list of differences are:
+
+* Don't save processing progress
+* Distributed processing not supported
+* Don't write dataframe to disk
+* Returns the dataframe
+
+##### Example:
+``` python
+from pdf2dataset import extract_text
+
+df = extract_text('my_pdfs_folder', small=True)
+# ...
+```
 ### Results File
 
 The resulting "file" is a parquet hive written with [fastparquet](https://github.com/dask/fastparquet), it can be
@@ -99,7 +129,7 @@ index
 There is no guarantee about the uniqueness or sequence of the `index`, you might need to create a new index with
 the whole data in memory.
 
-The `-1` page number means that was not possible of even openning the document.
+The `-1` page number means that was not possible of even opening the document.
 
 ### Run on a Cluster
 
@@ -112,7 +142,7 @@ setup.
 
 To go distributed you can run it just like local, but using the `--address` and `--redis-password` flags to point to your cluster ([More information](https://docs.ray.io/en/latest/multiprocessing.html)).
 
-With version >= 0.1.2, only the head node needs to have access to documents in disk.
+With version >= 0.2.0, only the head node needs to have access to the documents in disk.
 
 ### Help
 
