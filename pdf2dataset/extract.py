@@ -6,6 +6,7 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
+from more_itertools import ichunked
 
 import pandas as pd
 import fastparquet
@@ -30,7 +31,7 @@ class TextExtraction:
     def __init__(
         self, input_dir, results_file='', *,
         tmp_dir='', lang='por', ocr=False, small=False,
-        chunk_df_size=10000, simultaneous_documents=100, **kwargs
+        chunk_df_size=10000, **kwargs
     ):
 
         self.input_dir = Path(input_dir).resolve()
@@ -61,7 +62,6 @@ class TextExtraction:
 
         self._df_lock = threading.Lock()
         self.chunk_df_size = chunk_df_size
-        self.simultaneous_documents = simultaneous_documents
 
     @staticmethod
     def get_docs(input_dir):
@@ -179,19 +179,20 @@ class TextExtraction:
         chunksize = int(max(1, (len(docs)/self.num_cpus)//10))
 
         tasks = []
-        with tqdm(desc='Counting pages', unit='pages') as pbar:
-            with Pool(self.num_cpus) as pool:
-                results = pool.imap(
-                    self._get_pages_range, docs, chunksize=chunksize
-                )
+        with Pool(self.num_cpus) as pool, \
+                tqdm(desc='Counting pages', unit='pages') as pbar:
 
-                for doc, range_pages in zip(docs, results):
-                    new_tasks = [
-                        ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr)
-                        for p in range_pages
-                    ]
-                    tasks += new_tasks
-                    pbar.update(len(new_tasks))
+            results = pool.imap(
+                self._get_pages_range, docs, chunksize=chunksize
+            )
+
+            for doc, range_pages in zip(docs, results):
+                new_tasks = [
+                    ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr)
+                    for p in range_pages
+                ]
+                tasks += new_tasks
+                pbar.update(len(new_tasks))
 
         return tasks
 
@@ -240,29 +241,33 @@ class TextExtraction:
         return task, result, error
 
     @ray.remote
-    def process_task_ray(task):
-        return TextExtraction.process_task(task)
+    def process_chunk_ray(chunk):
+        return [TextExtraction.process_task(t) for t in chunk]
 
-    def _ray_process(self, tasks):
+    def _ray_process(self, tasks, chunksize):
         tasks = iter(tasks)
         futures = []
 
-        for task in tasks:
-            task = self._load_task_bin(task)
-            futures.append(self.process_task_ray.remote(task))
+        chunks = ichunked(tasks, int(chunksize))
 
-            if len(futures) >= self.simultaneous_documents:
+        for chunk in chunks:
+            chunk = [self._load_task_bin(t) for t in chunk]
+            futures.append(self.process_chunk_ray.remote(chunk))
+
+            if len(futures) >= self.num_cpus + 4:
                 break
 
         while futures:
             finished, rest = ray.wait(futures, num_returns=1)
-            result = ray.get(finished[0])
+            results = ray.get(finished[0])
 
-            yield result
+            for result in results:
+                yield result
 
             try:
-                task = self._load_task_bin(next(tasks))
-                rest.append(self.process_task_ray.remote(task))
+                chunk = next(chunks)
+                chunk = [self._load_task_bin(t) for t in chunk]
+                rest.append(self.process_chunk_ray.remote(chunk))
             except StopIteration:
                 ...
 
@@ -281,11 +286,11 @@ class TextExtraction:
 
         ray.init(**self.ray_params)
 
-        with ThreadPoolExecutor() as thread_exe:
+        with ThreadPoolExecutor(max_workers=4) as thread_exec:
             thread_fs, texts, errors = [], [], []
             processed, not_processed = tasks
 
-            not_processed = self._ray_process(not_processed)
+            not_processed = self._ray_process(not_processed, chunksize)
             results = it.chain(processed, not_processed)
 
             for result in self._get_apply_bar(results, num_tasks):
@@ -301,7 +306,7 @@ class TextExtraction:
 
                 if self.tmp_dir:
                     thread_fs.append(
-                        thread_exe.submit(path.write_text, text)
+                        thread_exec.submit(path.write_text, text)
                     )
 
                 if len(texts) + len(errors) >= self.chunk_df_size:
@@ -309,7 +314,7 @@ class TextExtraction:
                     df = self._to_df(texts, errors)
 
                     thread_fs.append(
-                        thread_exe.submit(self._append_df, df)
+                        thread_exec.submit(self._append_df, df)
                     )
                     texts, errors = [], []
 
@@ -317,7 +322,7 @@ class TextExtraction:
                 df = self._to_df(texts, errors)
 
                 thread_fs.append(
-                    thread_exe.submit(self._append_df, df)
+                    thread_exec.submit(self._append_df, df)
                 )
 
             for f in thread_fs:  # Avoid fail silently
@@ -368,7 +373,8 @@ class TextExtraction:
                 f" processed pages in directory '{self.tmp_dir}'"
             )
 
-        chunksize = int(max(1, (len(tasks)/self.num_cpus)//100))
+        chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
+        chunksize = int(max(1, chunk_by_cpu))
 
         if self.small:
             return self._apply_small(tasks, num_tasks, chunksize)

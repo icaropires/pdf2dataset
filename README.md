@@ -95,6 +95,7 @@ be understood as that the extraction won't run for hours or days and locally).
 
 The complete list of differences are:
 
+* Faster initialization (use multiprocessing instead of ray)
 * Don't save processing progress
 * Distributed processing not supported
 * Don't write dataframe to disk
