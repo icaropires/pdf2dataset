@@ -1,6 +1,7 @@
 import io
 import os
 import traceback
+import copy
 
 import numpy as np
 import pytesseract
@@ -12,12 +13,24 @@ from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 
 class ExtractionTask:
 
-    def __init__(self, doc, doc_bin, page, lang='por', ocr=False):
+    def __init__(self, doc, page, doc_bin=None, *, lang='por', ocr=False):
         self.doc = doc
         self.doc_bin = doc_bin
         self.page = page
         self.lang = lang
         self.ocr = ocr
+
+    def load_bin(self):
+        '''
+        Loads the document binary
+
+        Should not be called inside the same class, as the node running this
+        task might not have access to the document in his filesystem
+        '''
+        self.doc_bin = self.doc.read_bytes()
+
+    def copy(self):
+        return copy.copy(self)
 
     def ocr_image(self, img):
         # So pytesseract uses only one core per worker
@@ -66,13 +79,19 @@ class ExtractionTask:
 
         try:
             with io.BytesIO(self.doc_bin) as f:
-                text = pdftotext.PDF(f)[self.page-1]
+                pages = pdftotext.PDF(f)
+                text = pages[self.page-1]
         except pdftotext.Error:
             error = traceback.format_exc()
 
         return text, error
 
     def process(self):
+        if not self.doc_bin:
+            raise RuntimeError(
+                "'doc_bin' can't be empty for processing the task"
+            )
+
         if self.ocr:
             return self._process_ocr()
 

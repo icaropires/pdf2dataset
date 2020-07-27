@@ -1,17 +1,15 @@
 #!/bin/env python3
 
-import os
-from concurrent.futures import ThreadPoolExecutor
-import threading
-import logging
 import itertools as it
+import logging
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
 
 import pandas as pd
 import fastparquet
 import ray
-from ray.util.multiprocessing import Pool as RayPool
-from ray.util.multiprocessing.pool import PoolTaskError
 from tqdm import tqdm
 from pathlib import Path
 import pdftotext
@@ -31,24 +29,22 @@ class TextExtraction:
 
     def __init__(
         self, input_dir, results_file='', *,
-        tmp_dir='', lang='por', ocr=False, small=False, **kwargs
+        tmp_dir='', lang='por', ocr=False, small=False,
+        chunk_df_size=10000, simultaneous_documents=100, **kwargs
     ):
 
         self.input_dir = Path(input_dir).resolve()
-        assert self.input_dir.is_dir()
+        assert self.input_dir.exists() and self.input_dir.is_dir()
 
         self.results_file = Path(results_file).resolve()
+        self.ray_params = kwargs
 
         if not small:
-            ray.init(ignore_reinit_error=True, **kwargs)
-            print()  # Shame
-
             if not results_file:
                 raise RuntimeError(
                     "If not using 'small', 'results_file' is mandatory"
                 )
 
-            # Warning after the ray.init logging
             if self.results_file.exists():
                 logging.warning(f'{results_file} already exists!'
                                 ' Results will be appended to it!')
@@ -64,7 +60,8 @@ class TextExtraction:
         self.ocr = ocr
 
         self._df_lock = threading.Lock()
-        self._chunk_df_size = 10000  # Dask default
+        self.chunk_df_size = chunk_df_size
+        self.simultaneous_documents = simultaneous_documents
 
     @staticmethod
     def get_docs(input_dir):
@@ -159,12 +156,7 @@ class TextExtraction:
             )
 
     @staticmethod
-    def _process_task(task):
-        result, error = task.process()
-        return task, result, error
-
-    @staticmethod
-    def _list_pages(doc):
+    def _get_pages_range(doc):
         # Using pdftotext to get num_pages because it's the best way I know
         # pdftotext extracts lazy, so this won't process the text
 
@@ -187,16 +179,15 @@ class TextExtraction:
         chunksize = int(max(1, (len(docs)/self.num_cpus)//10))
 
         tasks = []
-        with tqdm(desc='Generating tasks', unit='tasks') as pbar:
+        with tqdm(desc='Counting pages', unit='pages') as pbar:
             with Pool(self.num_cpus) as pool:
                 results = pool.imap(
-                    self._list_pages, docs, chunksize=chunksize
+                    self._get_pages_range, docs, chunksize=chunksize
                 )
 
                 for doc, range_pages in zip(docs, results):
                     new_tasks = [
-                        ExtractionTask(doc, doc.read_bytes(), p,
-                                       self.lang, self.ocr)
+                        ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr)
                         for p in range_pages
                     ]
                     tasks += new_tasks
@@ -229,26 +220,55 @@ class TextExtraction:
 
         return processed, not_processed
 
-    def _get_tasks(self, docs):
-        tasks = self._gen_tasks(docs)
-        processed, not_processed = self._split_processed_tasks(tasks)
-
-        if len(processed):
-            logging.warning(
-                f"Skipping {len(processed)} already"
-                f" processed pages in directory '{self.tmp_dir}'"
-            )
-
-        return processed, not_processed
-
     @staticmethod
-    def _get_apply_bar(tasks_results, tasks):
+    def _get_apply_bar(tasks_results, num_tasks):
         return tqdm(
-            tasks_results, total=len(tasks[0]) + len(tasks[1]),
+            tasks_results, total=num_tasks,
             desc='Processing pages', unit='pages', dynamic_ncols=True
         )
 
-    def _apply_big(self, tasks, chunksize):
+    @staticmethod
+    def _load_task_bin(task):
+        task = task.copy()  # Copy to have control over memory references
+        task.load_bin()
+
+        return task
+
+    @staticmethod
+    def process_task(task):
+        result, error = task.process()
+        return task, result, error
+
+    @ray.remote
+    def process_task_ray(task):
+        return TextExtraction.process_task(task)
+
+    def _ray_process(self, tasks):
+        tasks = iter(tasks)
+        futures = []
+
+        for task in tasks:
+            task = self._load_task_bin(task)
+            futures.append(self.process_task_ray.remote(task))
+
+            if len(futures) >= self.simultaneous_documents:
+                break
+
+        while futures:
+            finished, rest = ray.wait(futures, num_returns=1)
+            result = ray.get(finished[0])
+
+            yield result
+
+            try:
+                task = self._load_task_bin(next(tasks))
+                rest.append(self.process_task_ray.remote(task))
+            except StopIteration:
+                ...
+
+            futures = rest
+
+    def _apply_big(self, tasks, num_tasks, chunksize):
         'Apply the extractino to a big volume of data'
 
         print('\n=== SUMMARY ===',
@@ -259,42 +279,39 @@ class TextExtraction:
               f'Temporary directory: {self.tmp_dir or "not used"}',
               sep='\n', end='\n\n')
 
-        # There can be many files to be saved, so, doing async
+        ray.init(**self.ray_params)
+
         with ThreadPoolExecutor() as thread_exe:
             thread_fs, texts, errors = [], [], []
             processed, not_processed = tasks
 
-            with RayPool() as pool:  # May be distributed
-                processing_tasks = pool.imap_unordered(
-                    self._process_task, not_processed, chunksize=chunksize
-                )
-                tasks_results = it.chain(processed, processing_tasks)
+            not_processed = self._ray_process(not_processed)
+            results = it.chain(processed, not_processed)
 
-                for result in self._get_apply_bar(tasks_results, tasks):
+            for result in self._get_apply_bar(results, num_tasks):
+                if isinstance(result, Exception):
+                    raise result
 
-                    if isinstance(result, PoolTaskError):
-                        raise result.underlying
+                path, text, is_error = self._get_savinginfo(result)
 
-                    path, text, is_error = self._get_savinginfo(result)
+                if not is_error:
+                    texts.append((path, text))
+                else:
+                    errors.append((path, text))
 
-                    if not is_error:
-                        texts.append((path, text))
-                    else:
-                        errors.append((path, text))
+                if self.tmp_dir:
+                    thread_fs.append(
+                        thread_exe.submit(path.write_text, text)
+                    )
 
-                    if self.tmp_dir:
-                        thread_fs.append(
-                            thread_exe.submit(path.write_text, text)
-                        )
+                if len(texts) + len(errors) >= self.chunk_df_size:
+                    # Persist to disk, aiming large amount of data
+                    df = self._to_df(texts, errors)
 
-                    if len(texts) + len(errors) >= self._chunk_df_size:
-                        # Persist to disk, aiming large amount of data
-                        df = self._to_df(texts, errors)
-
-                        thread_fs.append(
-                            thread_exe.submit(self._append_df, df)
-                        )
-                        texts, errors = [], []
+                    thread_fs.append(
+                        thread_exe.submit(self._append_df, df)
+                    )
+                    texts, errors = [], []
 
             if texts or errors:
                 df = self._to_df(texts, errors)
@@ -306,7 +323,9 @@ class TextExtraction:
             for f in thread_fs:  # Avoid fail silently
                 f.result()
 
-    def _apply_small(self, tasks, chunksize):
+        ray.shutdown()
+
+    def _apply_small(self, tasks, num_tasks, chunksize):
         ''''Apply the extraction to a small volume of data
         More direct approach than 'big', but with these differences:
             - Not saving progress
@@ -317,14 +336,15 @@ class TextExtraction:
 
         texts, errors = [], []
         processed, not_processed = tasks
+        not_processed = (self._load_task_bin(t) for t in not_processed)
 
         with Pool(self.num_cpus) as pool:
             processing_tasks = pool.imap_unordered(
-                self._process_task, not_processed, chunksize=chunksize
+                self.process_task, not_processed, chunksize=chunksize
             )
             tasks_results = it.chain(processed, processing_tasks)
 
-            for result in self._get_apply_bar(tasks_results, tasks):
+            for result in self._get_apply_bar(tasks_results, num_tasks):
                 path, text, is_error = self._get_savinginfo(result)
 
                 if not is_error:
@@ -336,13 +356,24 @@ class TextExtraction:
 
     def apply(self):
         docs = self.get_docs(self.input_dir)
-        tasks = self._get_tasks(docs)
+        tasks = self._gen_tasks(docs)
+        num_tasks = len(tasks)
+
+        processed, not_processed = self._split_processed_tasks(tasks)
+        tasks = (processed, not_processed)
+
+        if len(processed):
+            logging.warning(
+                f"Skipping {len(processed)} already"
+                f" processed pages in directory '{self.tmp_dir}'"
+            )
+
         chunksize = int(max(1, (len(tasks)/self.num_cpus)//100))
 
         if self.small:
-            return self._apply_small(tasks, chunksize)
+            return self._apply_small(tasks, num_tasks, chunksize)
 
-        return self._apply_big(tasks, chunksize)
+        return self._apply_big(tasks, num_tasks, chunksize)
 
 
 def extract_text(*args, **kwargs):
