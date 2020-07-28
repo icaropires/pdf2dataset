@@ -13,7 +13,7 @@ repository = "https://github.com/icaropires/pdf2dataset"
 
 [tool.poetry.dependencies]
 fastparquet = "0.4.0"
-more-itertools = 8.4.0
+more-itertools = "8.4.0"
 opencv-python = "4.2.0.34"
 packaging = "20.4"
 pdf2image = "1.13.1"

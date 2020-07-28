@@ -6,16 +6,14 @@ import pandas as pd
 from pdf2dataset import TextExtraction, extract_text
 
 
-class TestExtraction:
+def check_df(df, use_ocr, expected=None, expected_shape=(9, 4)):
+    'Check dataframe based on samples folder'
 
-    @staticmethod
-    def check_df(df, use_ocr):
-        'Check dataframe based on samples folder'
+    assert df.shape == expected_shape
 
-        assert df.shape == (9, 4)
+    rows = sorted([r[1:] for r in df.itertuples()])
 
-        rows = sorted([r[1:] for r in df.itertuples()])
-
+    if expected is None:
         # Error as boolean just for testing
         expected = sorted([
             ('multi_page1.pdf', 1, 'First page', False),
@@ -29,18 +27,21 @@ class TestExtraction:
             ('invalid1.pdf', -1, '', True)
         ])
 
-        for idx, r in enumerate(rows):
-            *other, error = r
-            assert tuple(other) == expected[idx][:-1]
+    for idx, r in enumerate(rows):
+        *other, error = r
+        assert tuple(other) == expected[idx][:-1]
 
-            has_error = expected[idx][-1]
-            assert bool(error) == has_error
+        has_error = expected[idx][-1]
+        assert bool(error) == has_error
 
-            if has_error:
-                assert 'Traceback' in error
+        if has_error:
+            assert 'Traceback' in error
 
-                pdftotext_error_msg = 'poppler error creating document'
-                assert (pdftotext_error_msg in error) != use_ocr
+            pdftotext_error_msg = 'poppler error creating document'
+            assert (pdftotext_error_msg in error) != use_ocr
+
+
+class TestExtraction:
 
     @pytest.mark.parametrize('use_ocr', (
         True,
@@ -52,7 +53,7 @@ class TestExtraction:
         extract_text('tests/samples', result_path, lang='eng', ocr=use_ocr)
 
         df = pd.read_parquet(result_path, engine='fastparquet')
-        self.check_df(df, use_ocr)
+        check_df(df, use_ocr)
 
     @pytest.mark.parametrize('use_ocr', (
         True,
@@ -60,7 +61,30 @@ class TestExtraction:
     ))
     def test_extraction_small(self, tmp_path, use_ocr):
         df = extract_text('tests/samples', small=True, lang='eng', ocr=use_ocr)
-        self.check_df(df, use_ocr)
+        check_df(df, use_ocr)
+
+    def test_pass_tasks(self):
+        with open('tests/samples/single_page1.pdf', 'rb') as f:
+            pdf1_bin = f.read()
+
+        with open('tests/samples/multi_page1.pdf', 'rb') as f:
+            pdf2_bin = f.read()
+
+        tasks = [
+            ('doc1.pdf', pdf1_bin),  # All pages
+            ('2.pdf', pdf2_bin, 2),  # Just page 2
+            ('pdf2.pdf', pdf2_bin, 3),  # Just page 3
+        ]
+
+        expected = sorted([
+            ('pdf2.pdf', 3, 'Third page', False),
+            ('2.pdf', 2, 'Second page', False),
+            ('doc1.pdf', 1, 'My beautiful sample!', False),
+        ])
+        expected_shape = (3, 4)
+
+        df = extract_text(tasks=tasks, small=True)
+        check_df(df, False, expected, expected_shape)
 
     def test_tmpdir(self, tmp_path, tmpdir):
         result_path = tmp_path / 'result.parquet.gzip'

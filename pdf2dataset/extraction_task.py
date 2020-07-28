@@ -20,14 +20,15 @@ class ExtractionTask:
         self.lang = lang
         self.ocr = ocr
 
-    def load_bin(self):
+    def load_bin(self, enforce=False):
         '''
         Loads the document binary
 
         Should not be called inside the same class, as the node running this
         task might not have access to the document in his filesystem
         '''
-        self.doc_bin = self.doc.read_bytes()
+        if enforce or not self.doc_bin:
+            self.doc_bin = self.doc.read_bytes()
 
     def copy(self):
         return copy.copy(self)
