@@ -19,7 +19,7 @@ import pdftotext
 from .extraction_task import ExtractionTask
 
 
-# TODO: Some day I will reduce this file size
+# TODO: Some day I will reduce this file size!!
 
 # TODO: Add typing
 # TODO: Set up a logger to the class
@@ -31,19 +31,12 @@ class TextExtraction:
     _path_pat = r'((?P<path>.+)_(?P<page>(-?\d+|doc))(.txt|_error.log))'
 
     def __init__(
-        self, input_dir='', results_file='', *,
-        tasks=[], tmp_dir='', lang='por', ocr=False, small=False,
+        self, input_dir, results_file='', *,
+        tmp_dir='', lang='por', ocr=False, small=False,
         chunk_df_size=10000, **kwargs
     ):
 
-        self.input_dir = Path(input_dir).resolve() if input_dir else ''
-        self.tasks = tasks
-
-        if not tasks:
-            if not self.input_dir:
-                raise RuntimeError("'input_dir' mandatory if not 'tasks'")
-
-            assert self.input_dir.exists() and self.input_dir.is_dir()
+        self.input_dir = Path(input_dir).resolve()
 
         self.results_file = Path(results_file).resolve()
         self.ray_params = kwargs
@@ -58,8 +51,7 @@ class TextExtraction:
                 logging.warning(f'{results_file} already exists!'
                                 ' Results will be appended to it!')
 
-        self.num_cpus = kwargs.get('num_cpus', None)
-        self.num_cpus = self.num_cpus or os.cpu_count()
+        self.num_cpus = kwargs.get('num_cpus') or os.cpu_count()
 
         # Keep str and not Path, custom behaviour if is empty
         self.tmp_dir = tmp_dir
@@ -187,10 +179,6 @@ class TextExtraction:
         Returns tasks to be processed.
         For faulty documents, only the page -1 will be available
         '''
-        if not isinstance(docs_or_tasks[0], (str, Path)):
-            tasks = docs_or_tasks
-            return self._gen_tasks_from_tasks(tasks)
-
         docs = docs_or_tasks
 
         # 10 because this is a fast operation
@@ -213,44 +201,6 @@ class TextExtraction:
                 pbar.update(len(new_tasks))
 
         return tasks
-
-    def _gen_tasks_from_tasks(self, tasks):
-        ''' Generate ExtractionTask from simplified tasks.
-
-        Assumes is not a big volume, otherwise should save documents to
-        a directory. So, not going with multiprocessing here.
-        '''
-
-        def uniform(task):
-            range_pages = None
-
-            if len(task) == 2:
-                doc, doc_bin = task
-            elif len(task) == 3:
-                doc, doc_bin, page = task
-                range_pages = [page]
-            else:
-                raise RuntimeError(
-                    'Wrong task format, it must be'
-                    ' (document_name, document_bin)'
-                    ' or (document_name, document_bin, page_number)'
-                )
-
-            if not range_pages:
-                range_pages = self._get_pages_range(doc, doc_bin=doc_bin)
-
-            return Path(str(doc)), doc_bin, range_pages
-
-        tasks = [uniform(t) for t in tasks]
-
-        new_tasks = []
-        for doc, doc_bin, range_pages in tasks:
-            new_tasks += [
-                ExtractionTask(doc, p, doc_bin, lang=self.lang, ocr=self.ocr)
-                for p in range_pages
-            ]
-
-        return new_tasks
 
     def _split_processed_tasks(self, tasks):
         def get_taskinfo(task):
@@ -416,20 +366,13 @@ class TextExtraction:
 
         return self._to_df(texts, errors)
 
-    def apply(self):
-        if not self.tasks:
-            docs = self.get_docs(self.input_dir)
-            tasks = self._gen_tasks(docs)
-        else:
-            tasks = self._gen_tasks(self.tasks)
-
+    def _apply_tasks(self, tasks):
         processed, not_processed = self._split_processed_tasks(tasks)
+        num_tasks = len(tasks)
+        tasks = (processed, not_processed)
 
         chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
         chunksize = int(max(1, chunk_by_cpu))
-
-        num_tasks = len(tasks)
-        tasks = (processed, not_processed)
 
         if len(processed):
             logging.warning(
@@ -442,7 +385,8 @@ class TextExtraction:
 
         return self._apply_big(tasks, num_tasks, chunksize)
 
+    def apply(self):
+        docs = self.get_docs(self.input_dir)
+        tasks = self._gen_tasks(docs)
 
-def extract_text(*args, **kwargs):
-    extraction = TextExtraction(*args, **kwargs)
-    return extraction.apply()
+        return self._apply_tasks(tasks)

@@ -63,29 +63,6 @@ class TestExtraction:
         df = extract_text('tests/samples', small=True, lang='eng', ocr=use_ocr)
         check_df(df, use_ocr)
 
-    def test_pass_tasks(self):
-        with open('tests/samples/single_page1.pdf', 'rb') as f:
-            pdf1_bin = f.read()
-
-        with open('tests/samples/multi_page1.pdf', 'rb') as f:
-            pdf2_bin = f.read()
-
-        tasks = [
-            ('doc1.pdf', pdf1_bin),  # All pages
-            ('2.pdf', pdf2_bin, 2),  # Just page 2
-            ('pdf2.pdf', pdf2_bin, 3),  # Just page 3
-        ]
-
-        expected = sorted([
-            ('pdf2.pdf', 3, 'Third page', False),
-            ('2.pdf', 2, 'Second page', False),
-            ('doc1.pdf', 1, 'My beautiful sample!', False),
-        ])
-        expected_shape = (3, 4)
-
-        df = extract_text(tasks=tasks, small=True)
-        check_df(df, False, expected, expected_shape)
-
     def test_tmpdir(self, tmp_path, tmpdir):
         result_path = tmp_path / 'result.parquet.gzip'
         tmp_dir = Path(tmpdir.mkdir('tmp'))
@@ -128,3 +105,40 @@ class TestExtraction:
     def test_path_pattern(self, path, expected):
         result = re.match(TextExtraction._path_pat, path)
         assert result.groupdict() == expected
+
+
+class TestExtractionNotDir:
+
+    @pytest.mark.parametrize('small', (
+        True,
+        False,
+    ))
+    def test_pass_tasks(self, tmp_path, small):
+        with open('tests/samples/single_page1.pdf', 'rb') as f:
+            pdf1_bin = f.read()
+
+        with open('tests/samples/multi_page1.pdf', 'rb') as f:
+            pdf2_bin = f.read()
+
+        tasks = [
+            ('doc1.pdf', pdf1_bin),  # All pages
+            ('2.pdf', pdf2_bin, 2),  # Just page 2
+            ('pdf2.pdf', pdf2_bin, 3),  # Just page 3
+        ]
+
+        expected = sorted([
+            ('pdf2.pdf', 3, 'Third page', False),
+            ('2.pdf', 2, 'Second page', False),
+            ('doc1.pdf', 1, 'My beautiful sample!', False),
+        ])
+        expected_shape = (3, 4)
+
+        if small:
+            df = extract_text(tasks=tasks, small=small)
+        else:
+            result_path = tmp_path / 'result.parquet.gzip'
+            extract_text(tasks, result_path)
+
+            df = pd.read_parquet(result_path, engine='fastparquet')
+
+        check_df(df, False, expected, expected_shape)
