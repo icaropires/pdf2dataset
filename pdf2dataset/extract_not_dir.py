@@ -23,13 +23,12 @@ class TextExtractionNotDir(TextExtraction):
         '''
 
         def uniform(task):
-            range_pages = None
+            page = None
 
             if len(task) == 2:
                 doc, doc_bin = task
             elif len(task) == 3:
                 doc, doc_bin, page = task
-                range_pages = [page]
             else:
                 raise RuntimeError(
                     'Wrong task format, it must be'
@@ -42,8 +41,15 @@ class TextExtractionNotDir(TextExtraction):
                     f"Document '{doc}' name must ends with '.pdf'"
                 )
 
-            if not range_pages:
-                range_pages = self._get_pages_range(doc, doc_bin=doc_bin)
+            range_pages = self._get_pages_range(doc, doc_bin=doc_bin)
+
+            # -1 specifically because of the flag used by _get_pages_range
+            if page in range_pages and not page == -1:
+                range_pages = [page]
+            elif page is not None:
+                raise RuntimeError(
+                    f"Page {page} doesn't exist in document {doc}!"
+                )
 
             return Path(doc).resolve(), doc_bin, range_pages
 
