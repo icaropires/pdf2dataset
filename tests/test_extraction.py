@@ -64,13 +64,10 @@ class TestExtraction:
         check_df(df, use_ocr)
 
     def test_return_list(self):
-        texts_list = extract_text('tests/samples', small=True,
-                                  lang='eng', return_list=True)
+        texts_list = extract_text('tests/samples', return_list=True,
+                                  lang='eng')
 
-        texts_list = sorted(
-            [sorted(e) for e in texts_list],
-            key=lambda x: len(x)
-        )
+        texts_list = sorted(texts_list, key=lambda x: len(x))
 
         assert texts_list == [
             # invalid1.pdf
