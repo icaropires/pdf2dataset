@@ -63,6 +63,32 @@ class TestExtraction:
         df = extract_text('tests/samples', small=True, lang='eng', ocr=use_ocr)
         check_df(df, use_ocr)
 
+    def test_return_list(self):
+        texts_list = extract_text('tests/samples', small=True,
+                                  lang='eng', return_list=True)
+
+        texts_list = sorted(
+            [sorted(e) for e in texts_list],
+            key=lambda x: len(x)
+        )
+
+        assert texts_list == [
+            # invalid1.pdf
+            [''],
+
+            # single_page.pdf
+            ['My beautiful sample!'],
+
+            # sub2/copy_single_page.pdf
+            ['My beautiful sample!'],
+
+            # multi_page.pdf
+            ['First page', 'Second page', 'Third page'],
+
+            # sub1/copy_multi_page.pdf
+            ['First page', 'Second page', 'Third page'],
+        ]
+
     def test_tmpdir(self, tmp_path, tmpdir):
         result_path = tmp_path / 'result.parquet.gzip'
         tmp_dir = Path(tmpdir.mkdir('tmp'))
