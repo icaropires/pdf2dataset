@@ -36,6 +36,11 @@ def main():
         default=False,
         help="'pytesseract' if true, else 'pdftotext'. default: false"
     )
+    parser.add_argument(
+        '--chunksize',
+        type=int,
+        help="Chunksize to use while processing pages, otherwise is calculated"
+    )
 
     # Ray
     parser.add_argument(

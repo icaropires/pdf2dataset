@@ -33,7 +33,7 @@ class TextExtraction:
     def __init__(
         self, input_dir, results_file='', *,
         tmp_dir='', lang='por', ocr=False, small=False,
-        chunk_df_size=10000, **kwargs
+        chunksize=None, chunk_df_size=10000, **kwargs
     ):
 
         self.input_dir = Path(input_dir).resolve()
@@ -56,6 +56,7 @@ class TextExtraction:
         # Keep str and not Path, custom behaviour if is empty
         self.tmp_dir = tmp_dir
 
+        self.chunksize = chunksize
         self.small = small
         self.lang = lang
         self.ocr = ocr
@@ -250,11 +251,11 @@ class TextExtraction:
     def process_chunk_ray(chunk):
         return [TextExtraction.process_task(t) for t in chunk]
 
-    def _ray_process(self, tasks, chunksize):
+    def _ray_process(self, tasks):
         tasks = iter(tasks)
         futures = []
 
-        chunks = ichunked(tasks, int(chunksize))
+        chunks = ichunked(tasks, int(self.chunksize))
 
         for chunk in chunks:
             chunk = [self._load_task_bin(t) for t in chunk]
@@ -279,14 +280,14 @@ class TextExtraction:
 
             futures = rest
 
-    def _apply_big(self, tasks, num_tasks, chunksize):
+    def _apply_big(self, tasks, num_tasks):
         'Apply the extractino to a big volume of data'
 
         print('\n=== SUMMARY ===',
               f'PDFs directory: {self.input_dir}',
               f'Results file: {self.results_file}',
               f'Using {self.num_cpus} CPU(s)',
-              f'Chunksize: {chunksize} (calculated)',
+              f'Chunksize: {self.chunksize}',
               f'Temporary directory: {self.tmp_dir or "not used"}',
               sep='\n', end='\n\n')
 
@@ -297,7 +298,7 @@ class TextExtraction:
             thread_fs, texts, errors = [], [], []
             processed, not_processed = tasks
 
-            not_processed = self._ray_process(not_processed, chunksize)
+            not_processed = self._ray_process(not_processed)
             results = it.chain(processed, not_processed)
 
             for result in self._get_apply_bar(results, num_tasks):
@@ -337,7 +338,7 @@ class TextExtraction:
 
         ray.shutdown()
 
-    def _apply_small(self, tasks, num_tasks, chunksize):
+    def _apply_small(self, tasks, num_tasks):
         ''''Apply the extraction to a small volume of data
         More direct approach than 'big', but with these differences:
             - Not saving progress
@@ -352,7 +353,7 @@ class TextExtraction:
 
         with Pool(self.num_cpus) as pool:
             processing_tasks = pool.imap_unordered(
-                self.process_task, not_processed, chunksize=chunksize
+                self.process_task, not_processed
             )
             tasks_results = it.chain(processed, processing_tasks)
 
@@ -371,8 +372,9 @@ class TextExtraction:
         num_tasks = len(tasks)
         tasks = (processed, not_processed)
 
-        chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
-        chunksize = int(max(1, chunk_by_cpu))
+        if self.chunksize is None:
+            chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
+            self.chunksize = int(max(1, chunk_by_cpu))
 
         if len(processed):
             logging.warning(
@@ -381,9 +383,9 @@ class TextExtraction:
             )
 
         if self.small:
-            return self._apply_small(tasks, num_tasks, chunksize)
+            return self._apply_small(tasks, num_tasks)
 
-        return self._apply_big(tasks, num_tasks, chunksize)
+        return self._apply_big(tasks, num_tasks)
 
     def apply(self):
         docs = self.get_docs(self.input_dir)
