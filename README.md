@@ -2,7 +2,8 @@
 
 ![pdf2dataset](https://github.com/icaropires/pdf2dataset/workflows/pdf2dataset/badge.svg)
 
-Converts a whole subdirectory with big a volume of PDF documents to a dataset (pandas DataFrame) with the columns: path x page x text x error
+Converts a whole subdirectory with any volume (small or huge) of PDF documents to a dataset (pandas DataFrame) with the columns: path x page x text x error.
+No need to setup any external service (no database, brokers, etc). Just install and run!
 
 
 ## Highlights
@@ -228,8 +229,10 @@ optional arguments:
 
 1. **Troubles with high memory usage**
 
-You can try to decrease the number of CPUs in use, reducing the level of parallelism,
-test it with `--num-cpus 1` flag and then increase according to your hardware.
+* Decrease the number of CPUs in use, reducing the level of parallelism, test it with `--num-cpus 1` flag and then increase according to your hardware.
+
+* Use smaller chunksize, so less documents will be put in memory at once. Use `--chunksize 1` for having `1 * num_cpus` documents in memory at once.
+
 
 ## How to Contribute
 

@@ -57,7 +57,7 @@ def main():
         '--webui-host',
         type=str,
         default='*',
-        help='Which port ray webui to listen'
+        help='Which IP ray webui will try to listen on'
     )
     parser.add_argument(
         '--redis-password',

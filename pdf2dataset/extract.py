@@ -33,29 +33,31 @@ class TextExtraction:
     def __init__(
         self, input_dir, results_file='', *,
         tmp_dir='', lang='por', ocr=False, small=False,
-        chunksize=None, chunk_df_size=10000, **kwargs
+        chunksize=None, chunk_df_size=10000, check_inputdir=True, **ray_params
     ):
 
         self.input_dir = Path(input_dir).resolve()
-
         self.results_file = Path(results_file).resolve()
-        self.ray_params = kwargs
+
+        if (check_inputdir and
+                (not (self.input_dir.exists() and self.input_dir.is_dir()))):
+            raise RuntimeError(f"Invalid input_dir: '{self.input_dir}',"
+                               " it must exists and be a directory")
 
         if not small:
             if not results_file:
-                raise RuntimeError(
-                    "If not using 'small', 'results_file' is mandatory"
-                )
+                raise RuntimeError("If not using 'small' arg,"
+                                   " 'results_file' is mandatory")
 
             if self.results_file.exists():
                 logging.warning(f'{results_file} already exists!'
                                 ' Results will be appended to it!')
 
-        self.num_cpus = kwargs.get('num_cpus') or os.cpu_count()
-
-        # Keep str and not Path, custom behaviour if is empty
+        # Keep str and not Path, custom behaviour if is empty string
         self.tmp_dir = tmp_dir
 
+        self.num_cpus = ray_params.get('num_cpus') or os.cpu_count()
+        self.ray_params = ray_params
         self.chunksize = chunksize
         self.small = small
         self.lang = lang
@@ -175,13 +177,11 @@ class TextExtraction:
 
         return pages
 
-    def _gen_tasks(self, docs_or_tasks):
+    def _gen_tasks(self, docs):
         '''
         Returns tasks to be processed.
         For faulty documents, only the page -1 will be available
         '''
-        docs = docs_or_tasks
-
         # 10 because this is a fast operation
         chunksize = int(max(1, (len(docs)/self.num_cpus)//10))
 

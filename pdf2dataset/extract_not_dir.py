@@ -8,6 +8,7 @@ class TextExtractionNotDir(TextExtraction):
 
     def __init__(self, tasks, *args, **kwargs):
         self.tasks = tasks
+        kwargs['check_inputdir'] = False
 
         super().__init__('', *args, **kwargs)
 
@@ -46,6 +47,7 @@ class TextExtractionNotDir(TextExtraction):
             # -1 specifically because of the flag used by _get_pages_range
             if page in range_pages and not page == -1:
                 range_pages = [page]
+
             elif page is not None:
                 raise RuntimeError(
                     f"Page {page} doesn't exist in document {doc}!"
