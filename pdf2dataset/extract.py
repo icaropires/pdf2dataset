@@ -33,7 +33,8 @@ class TextExtraction:
     def __init__(
         self, input_dir, results_file='', *,
         tmp_dir='', lang='por', ocr=False, small=False,
-        chunksize=None, chunk_df_size=10000, check_inputdir=True, **ray_params
+        chunksize=None, chunk_df_size=10000, check_inputdir=True,
+        max_docs_memory=3000, **ray_params
     ):
 
         self.input_dir = Path(input_dir).resolve()
@@ -62,6 +63,7 @@ class TextExtraction:
         self.small = small
         self.lang = lang
         self.ocr = ocr
+        self.max_docs_memory = max_docs_memory
 
         self._df_lock = threading.Lock()
         self.chunk_df_size = chunk_df_size
@@ -374,7 +376,8 @@ class TextExtraction:
 
         if self.chunksize is None:
             chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
-            self.chunksize = int(max(1, chunk_by_cpu))
+            max_chunksize = self.max_docs_memory // self.num_cpus
+            self.chunksize = int(max(1, min(chunk_by_cpu, max_chunksize)))
 
         if len(processed):
             logging.warning(
