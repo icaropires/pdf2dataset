@@ -7,3 +7,4 @@ pdftotext==2.1.4
 pytesseract==0.3.4
 ray==0.8.6
 tqdm==4.47.0
+more-itertools==8.4.0

@@ -33,6 +33,7 @@ class TextExtraction:
     def __init__(
         self, input_dir, results_file='', *,
         tmp_dir='', lang='por', ocr=False, small=False,
+        add_img_column=False, img_size=None,
         chunksize=None, chunk_df_size=10000, check_inputdir=True,
         max_docs_memory=3000, **ray_params
     ):
@@ -63,8 +64,9 @@ class TextExtraction:
         self.small = small
         self.lang = lang
         self.ocr = ocr
+        self.add_img_column = add_img_column
+        self.img_size = img_size
         self.max_docs_memory = max_docs_memory
-
         self._df_lock = threading.Lock()
         self.chunk_df_size = chunk_df_size
 
@@ -94,7 +96,12 @@ class TextExtraction:
             error_suffix = f'_{task.page}_error.log'
             name = output_path.stem + error_suffix
 
-        return output_path.with_name(name)
+        if self.add_img_column:
+            name_img = f'{output_path.stem}_{task.page}_img.txt'
+            return (output_path.with_name(name),
+                    output_path.with_name(name_img))
+        else:
+            return output_path.with_name(name)
 
     def _get_savinginfo(self, task_result):
         '''
@@ -117,6 +124,7 @@ class TextExtraction:
             )
 
         tmp_file = self._get_savingpath(task, is_error)
+
         return tmp_file, text, is_error
 
     @staticmethod
@@ -132,22 +140,40 @@ class TextExtraction:
         df = pd.DataFrame()
 
         if texts:
-            path, texts = zip(*texts)
-            df = pd.DataFrame({'path': path, 'text': texts, 'error': ''},
-                              dtype='str')
+            if self.add_img_column:
+                path, texts, imgs_preprocessed = zip(*texts)
+                df = pd.DataFrame({'path': path, 'text': texts,
+                                   'img': imgs_preprocessed, 'error': ''},
+                                  dtype='str')
+            else:
+                path, texts = zip(*texts)
+                df = pd.DataFrame({'path': path, 'text': texts, 'error': ''},
+                                  dtype='str')
 
         if errors:
             path, errors = zip(*errors)
 
-            df = pd.concat([
-                df,
-                pd.DataFrame(
-                    {'path': path, 'text': '', 'error': errors}, dtype='str'
-                ),
-            ])
+            if self.add_img_column:
+                df = pd.concat([
+                    df,
+                    pd.DataFrame(
+                        {'path': path, 'text': '', 'img': '',
+                         'error': errors}, dtype='str'),
+                ])
+            else:
+                df = pd.concat([
+                    df,
+                    pd.DataFrame(
+                        {'path': path, 'text': '',
+                         'error': errors}, dtype='str'),
+                ])
 
         df = self._preprocess_path(df)
-        df = df[['path', 'page', 'text', 'error']]
+
+        if self.add_img_column:
+            df = df[['path', 'page', 'text', 'img', 'error']]
+        else:
+            df = df[['path', 'page', 'text', 'error']]
 
         return df
 
@@ -197,7 +223,9 @@ class TextExtraction:
 
             for doc, range_pages in zip(docs, results):
                 new_tasks = [
-                    ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr)
+                    ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr,
+                                   img_column=self.add_img_column,
+                                   img_size=self.img_size)
                     for p in range_pages
                 ]
                 tasks += new_tasks
@@ -210,12 +238,23 @@ class TextExtraction:
             for is_error in (True, False):
                 filename = self._get_savingpath(task, is_error)
 
-                if filename.exists():
-                    text = filename.read_text()
-                    if is_error:
-                        return (task, None, text)  # TODO: Task result
+                if self.add_img_column:
+                    if filename[0].exists() and filename[1].exists():
+                        text = filename[0].read_text()
+                        image = filename[1].read_text().encode()
+                        if is_error:
+                            return (task, (None, None), text)
+                            # TODO: Task result
 
-                    return (task, text, None)  # TODO: Task result
+                        return (task, (text, image), None)
+                        # TODO: Task result
+                else:
+                    if filename.exists():
+                        text = filename.read_text()
+                        if is_error:
+                            return (task, None, text)  # TODO: Task result
+
+                        return (task, text, None)  # TODO: Task result
 
             return None
 
@@ -310,14 +349,26 @@ class TextExtraction:
                 path, text, is_error = self._get_savinginfo(result)
 
                 if not is_error:
-                    texts.append((path, text))
+                    if self.add_img_column:
+                        texts.append((path[0], text[0], text[1]))
+                    else:
+                        texts.append((path, text))
                 else:
                     errors.append((path, text))
 
                 if self.tmp_dir:
-                    thread_fs.append(
-                        thread_exec.submit(path.write_text, text)
-                    )
+                    if self.add_img_column:
+                        thread_fs.append(
+                            thread_exec.submit(path[0].write_text, text[0])
+                        )
+                        thread_fs.append(
+                            thread_exec.submit(path[1].write_text,
+                                               text[1].decode())
+                        )
+                    else:
+                        thread_fs.append(
+                            thread_exec.submit(path.write_text, text)
+                        )
 
                 if len(texts) + len(errors) >= self.chunk_df_size:
                     # Persist to disk, aiming large amount of data

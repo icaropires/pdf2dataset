@@ -86,4 +86,7 @@ venv.bak/
 # pytype static type analyzer
 .pytype/
 
+# VSCode settings
+.vscode/
+
 # End of https://www.toptal.com/developers/gitignore/api/python
