@@ -28,7 +28,7 @@ from .extraction_task import ExtractionTask
 
 
 class TextExtraction:
-    _path_pat = r'((?P<path>.+)_(?P<page>(-?\d+|doc))(.txt|_error.log))'
+    _path_pat = r'(?P<path>.+)_(?P<feature>(\w|-)+)_(?P<page>-?\d+)\.txt'
 
     def __init__(
         self, input_dir, results_file='', *,
@@ -86,98 +86,57 @@ class TextExtraction:
 
         return out_path
 
-    def _get_savingpath(self, task, is_error=False):
-        output_path = self._get_output_path(task.doc)
-        name = f'{output_path.stem}_{task.page}.txt'
+    def _get_feature_path(self, doc, page, feature):
+        output_path = self._get_output_path(Path(doc))
+        basename = f'{output_path.stem}_{feature}_{page}.txt'
 
-        if is_error:
-            # Commented to keep int16 instead of str
-            # page = task.page if task.page != -1 else 'doc'
-            error_suffix = f'_{task.page}_error.log'
-            name = output_path.stem + error_suffix
-
-        if self.add_img_column:
-            name_img = f'{output_path.stem}_{task.page}_img.txt'
-            return (output_path.with_name(name),
-                    output_path.with_name(name_img))
-        else:
-            return output_path.with_name(name)
-
-    def _get_savinginfo(self, task_result):
-        '''
-        Saves the temporary results for each file and returns the path
-        '''
-        task, result, error = task_result
-
-        text = None
-        if result is not None:
-            text = result
-            is_error = False
-
-        elif error is not None:
-            text = error
-            is_error = True
-
-        else:
-            raise RuntimeError(
-                "Processing failed and no errors were detected!"
-            )
-
-        tmp_file = self._get_savingpath(task, is_error)
-
-        return tmp_file, text, is_error
+        return output_path.with_name(basename)
 
     @staticmethod
-    def _preprocess_path(df):  # Side-effect
+    def _preprocess_path(df):
         parsed = df['path'].str.extract(TextExtraction._path_pat)
-
-        df['page'] = parsed['page'].astype('int16')
         df['path'] = parsed['path'] + '.pdf'
 
         return df
 
-    def _to_df(self, texts, errors):
-        df = pd.DataFrame()
+    def _doc_to_path(self, df):
+        any_feature = 'doc'
 
-        if texts:
-            if self.add_img_column:
-                path, texts, imgs_preprocessed = zip(*texts)
-                df = pd.DataFrame({'path': path, 'text': texts,
-                                   'img': imgs_preprocessed, 'error': ''},
-                                  dtype='str')
-            else:
-                path, texts = zip(*texts)
-                df = pd.DataFrame({'path': path, 'text': texts, 'error': ''},
-                                  dtype='str')
+        def gen_path(row):
+            path = self._get_feature_path(row.doc, row.page, any_feature)
+            return str(path)
 
-        if errors:
-            path, errors = zip(*errors)
-
-            if self.add_img_column:
-                df = pd.concat([
-                    df,
-                    pd.DataFrame(
-                        {'path': path, 'text': '', 'img': '',
-                         'error': errors}, dtype='str'),
-                ])
-            else:
-                df = pd.concat([
-                    df,
-                    pd.DataFrame(
-                        {'path': path, 'text': '',
-                         'error': errors}, dtype='str'),
-                ])
-
-        df = self._preprocess_path(df)
-
-        if self.add_img_column:
-            df = df[['path', 'page', 'text', 'img', 'error']]
-        else:
-            df = df[['path', 'page', 'text', 'error']]
+        df['path'] = df.apply(gen_path, axis=1)
+        df.pop('doc')
 
         return df
 
-    def _append_df(self, df):
+    def _save_tmp_files(self, result):
+        for feature in result:
+            if feature in ['doc', 'page']:
+                continue
+
+            # TODO: save any format, not just text
+            doc, page = result['doc'], result['page']
+            path = self._get_feature_path(doc, page, feature)
+            content = result[feature] or ''
+
+            Path(path).write_text(content)
+
+    def _to_df(self, results):
+        df = pd.DataFrame(results)
+
+        df = self._doc_to_path(df)
+        df = self._preprocess_path(df)
+
+        # Keep path and page as first columns
+        begin = ['path', 'page']
+        columns = begin + [c for c in df.columns.to_list() if c not in begin]
+
+        return df[columns]
+
+    def _append_to_df(self, results):
+        df = self._to_df(results)
 
         with self._df_lock:
             fastparquet.write(
@@ -233,44 +192,47 @@ class TextExtraction:
 
         return tasks
 
+    def _get_features_list(self, sample_task):
+        sample_task = ([], [sample_task])
+        sample_result = self._apply_to_small(sample_task, 1, progress=False)
+
+        return sample_result.columns
+
+    def _load_procesed_tasks(self, processed):
+        if not processed:
+            return []
+
+        features = self._get_features_list(processed[0])
+
+        def load(task):
+            paths = {f: self._get_feature_path(task.doc, task.page, f)
+                     for f in features if f not in ['path', 'page']}
+
+            result = {f: p.read_text() for f, p in paths.items()}
+            result['doc'] = task.doc
+            result['page'] = task.page
+
+            return result
+
+        return [load(task) for task in processed]
+
     def _split_processed_tasks(self, tasks):
-        def get_taskinfo(task):
-            for is_error in (True, False):
-                filename = self._get_savingpath(task, is_error)
-
-                if self.add_img_column:
-                    if filename[0].exists() and filename[1].exists():
-                        text = filename[0].read_text()
-                        image = filename[1].read_text().encode()
-                        if is_error:
-                            return (task, (None, None), text)
-                            # TODO: Task result
-
-                        return (task, (text, image), None)
-                        # TODO: Task result
-                else:
-                    if filename.exists():
-                        text = filename.read_text()
-                        if is_error:
-                            return (task, None, text)  # TODO: Task result
-
-                        return (task, text, None)  # TODO: Task result
-
-            return None
+        features = self._get_features_list(tasks[0])
 
         processed, not_processed = [], []
         for task in tasks:
-            tasks_result = get_taskinfo(task)
+            paths = (self._get_feature_path(task.doc, task.page, f)
+                     for f in features if f not in ['path', 'page'])
 
-            if tasks_result:
-                processed.append(tasks_result)
+            if all(p.exists() for p in paths):
+                processed.append(task)
             else:
                 not_processed.append(task)
 
         return processed, not_processed
 
     @staticmethod
-    def _get_apply_bar(tasks_results, num_tasks):
+    def _get_pbar(tasks_results, num_tasks):
         return tqdm(
             tasks_results, total=num_tasks,
             desc='Processing pages', unit='pages', dynamic_ncols=True
@@ -283,14 +245,9 @@ class TextExtraction:
 
         return task
 
-    @staticmethod
-    def process_task(task):
-        result, error = task.process()
-        return task, result, error
-
     @ray.remote
     def process_chunk_ray(chunk):
-        return [TextExtraction.process_task(t) for t in chunk]
+        return [t.process() for t in chunk]
 
     def _ray_process(self, tasks):
         tasks = iter(tasks)
@@ -299,7 +256,7 @@ class TextExtraction:
         chunks = ichunked(tasks, int(self.chunksize))
 
         for chunk in chunks:
-            chunk = [self._load_task_bin(t) for t in chunk]
+            chunk = [self._load_task_bin(task) for task in chunk]
             futures.append(self.process_chunk_ray.remote(chunk))
 
             if len(futures) >= self.num_cpus + 4:
@@ -321,8 +278,8 @@ class TextExtraction:
 
             futures = rest
 
-    def _apply_big(self, tasks, num_tasks):
-        'Apply the extractino to a big volume of data'
+    def _apply_to_big(self, tasks, num_tasks, progress=True):
+        'Apply the extraction to a big volume of data'
 
         print('\n=== SUMMARY ===',
               f'PDFs directory: {self.input_dir}',
@@ -332,66 +289,46 @@ class TextExtraction:
               f'Temporary directory: {self.tmp_dir or "not used"}',
               sep='\n', end='\n\n')
 
-        ray.init(**self.ray_params)
-
         # TODO: Add queue
-        with ThreadPoolExecutor(max_workers=4) as thread_exec:
-            thread_fs, texts, errors = [], [], []
+        with ThreadPoolExecutor(max_workers=4) as e:
             processed, not_processed = tasks
 
             not_processed = self._ray_process(not_processed)
-            results = it.chain(processed, not_processed)
+            processing_tasks = it.chain(processed, not_processed)
 
-            for result in self._get_apply_bar(results, num_tasks):
+            if progress:
+                processing_tasks = self._get_pbar(processing_tasks, num_tasks)
+
+            thread_fs, results = [], []
+            for result in processing_tasks:
                 if isinstance(result, Exception):
                     raise result
 
-                path, text, is_error = self._get_savinginfo(result)
-
-                if not is_error:
-                    if self.add_img_column:
-                        texts.append((path[0], text[0], text[1]))
-                    else:
-                        texts.append((path, text))
-                else:
-                    errors.append((path, text))
+                results.append(result)
 
                 if self.tmp_dir:
-                    if self.add_img_column:
-                        thread_fs.append(
-                            thread_exec.submit(path[0].write_text, text[0])
-                        )
-                        thread_fs.append(
-                            thread_exec.submit(path[1].write_text,
-                                               text[1].decode())
-                        )
-                    else:
-                        thread_fs.append(
-                            thread_exec.submit(path.write_text, text)
-                        )
+                    f = e.submit(self._save_tmp_files, result)
+                    thread_fs.append(f)
 
-                if len(texts) + len(errors) >= self.chunk_df_size:
+                if len(results) >= self.chunk_df_size:
                     # Persist to disk, aiming large amount of data
-                    df = self._to_df(texts, errors)
+                    f = e.submit(self._append_to_df, results)
+                    thread_fs.append(f)
 
-                    thread_fs.append(
-                        thread_exec.submit(self._append_df, df)
-                    )
-                    texts, errors = [], []
+                    results = []
 
-            if texts or errors:
-                df = self._to_df(texts, errors)
-
-                thread_fs.append(
-                    thread_exec.submit(self._append_df, df)
-                )
+            if results:
+                f = e.submit(self._append_to_df, results)
+                thread_fs.append(f)
 
             for f in thread_fs:  # Avoid fail silently
                 f.result()
 
-        ray.shutdown()
+    @staticmethod
+    def _process_task(task):
+        return task.process()
 
-    def _apply_small(self, tasks, num_tasks):
+    def _apply_to_small(self, tasks, num_tasks, progress=True):
         ''''Apply the extraction to a small volume of data
         More direct approach than 'big', but with these differences:
             - Not saving progress
@@ -400,35 +337,28 @@ class TextExtraction:
             - Returns the resultant dataframe
         '''
 
-        texts, errors = [], []
         processed, not_processed = tasks
         not_processed = (self._load_task_bin(t) for t in not_processed)
 
+        results = []
         with Pool(self.num_cpus) as pool:
-            processing_tasks = pool.imap_unordered(
-                self.process_task, not_processed
-            )
-            tasks_results = it.chain(processed, processing_tasks)
+            processing_tasks = pool.imap_unordered(self._process_task,
+                                                   not_processed)
+            processing_tasks = it.chain(processed, processing_tasks)
 
-            for result in self._get_apply_bar(tasks_results, num_tasks):
-                path, text, is_error = self._get_savinginfo(result)
+            if progress:
+                processing_tasks = self._get_pbar(processing_tasks, num_tasks)
 
-                if not is_error:
-                    texts.append((path, text))
-                else:
-                    errors.append((path, text))
+            results = list(processing_tasks)
 
-        return self._to_df(texts, errors)
+        return self._to_df(results)
 
-    def _apply_tasks(self, tasks):
+    def _process_tasks(self, tasks):
         processed, not_processed = self._split_processed_tasks(tasks)
+        processed = self._load_procesed_tasks(processed)
+
         num_tasks = len(tasks)
         tasks = (processed, not_processed)
-
-        if self.chunksize is None:
-            chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
-            max_chunksize = self.max_docs_memory // self.num_cpus
-            self.chunksize = int(max(1, min(chunk_by_cpu, max_chunksize)))
 
         if len(processed):
             logging.warning(
@@ -436,13 +366,25 @@ class TextExtraction:
                 f" processed pages in directory '{self.tmp_dir}'"
             )
 
-        if self.small:
-            return self._apply_small(tasks, num_tasks)
+        if self.chunksize is None:
+            chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
+            max_chunksize = self.max_docs_memory // self.num_cpus
+            self.chunksize = int(max(1, min(chunk_by_cpu, max_chunksize)))
 
-        return self._apply_big(tasks, num_tasks)
+        if self.small:
+            return self._apply_to_small(tasks, num_tasks)
+
+        result = None
+        try:
+            ray.init(**self.ray_params)
+            result = self._apply_to_big(tasks, num_tasks)
+        finally:
+            ray.shutdown()
+
+        return result
 
     def apply(self):
         docs = self.get_docs(self.input_dir)
         tasks = self._gen_tasks(docs)
 
-        return self._apply_tasks(tasks)
+        return self._process_tasks(tasks)

@@ -70,4 +70,4 @@ class TextExtractionNotDir(TextExtraction):
         # Simplified notation tasks to ExtractionTasks
         tasks = self._gen_tasks(self.tasks)
 
-        return self._apply_tasks(tasks)
+        return self._process_tasks(tasks)

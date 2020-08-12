@@ -24,6 +24,9 @@ class ExtractionTask:
         self.img_column = img_column
         self.img_size = img_size
 
+        # TODO: decorator
+        self._fixed_features = {'doc': str(self.doc), 'page': self.page}
+
     def load_bin(self, enforce=False):
         '''
         Loads the document binary
@@ -69,15 +72,14 @@ class ExtractionTask:
         return img_as_b64
 
     def get_page_img(self):
-        img = convert_from_bytes(
+        imgs = convert_from_bytes(
             self.doc_bin,
             first_page=self.page,
             single_file=True,
-            size=(None, 1100),
             fmt='jpeg'
         )
 
-        return img[0]
+        return imgs[0]
 
     def _process_ocr(self):
         text, img_encoded, img_preprocessed, error = None, None, None, None
@@ -94,7 +96,9 @@ class ExtractionTask:
         if self.img_column:
             return (text, img_encoded), error
         else:
-            return text, error
+            result = {'text': text, 'error': error}
+            result.update(self._fixed_features)
+            return result
 
     def _process_native(self):
         text, img_encoded, img_preprocessed, error = None, None, None, None
@@ -113,7 +117,10 @@ class ExtractionTask:
         if self.img_column:
             return (text, img_encoded), error
         else:
-            return text, error
+
+            result = {'text': text, 'error': error}
+            result.update(self._fixed_features)
+            return result
 
     def process(self):
         if not self.doc_bin:

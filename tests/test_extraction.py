@@ -24,7 +24,7 @@ def check_df(df, use_ocr, expected=None, expected_shape=(9, 4)):
             ('sub1/copy_multi_page1.pdf', 3, 'Third page', False),
             ('single_page1.pdf', 1, 'My beautiful sample!', False),
             ('sub2/copy_single_page1.pdf', 1, 'My beautiful sample!', False),
-            ('invalid1.pdf', -1, '', True)
+            ('invalid1.pdf', -1, None, True)
         ])
 
     for idx, r in enumerate(rows):
@@ -71,7 +71,7 @@ class TestExtraction:
 
         assert texts_list == [
             # invalid1.pdf
-            [''],
+            [None],
 
             # single_page.pdf
             ['My beautiful sample!'],
@@ -93,37 +93,54 @@ class TestExtraction:
         extract_text('tests/samples', result_path, tmp_dir=tmp_dir, lang='eng')
 
         expected_files = [
-            ('multi_page1_1.txt'),
-            ('multi_page1_2.txt'),
-            ('multi_page1_3.txt'),
+            ('multi_page1_text_1.txt'),
+            ('multi_page1_error_1.txt'),
+            ('multi_page1_text_2.txt'),
+            ('multi_page1_error_2.txt'),
+            ('multi_page1_text_3.txt'),
+            ('multi_page1_error_3.txt'),
             ('sub1'),
-            ('sub1/copy_multi_page1_1.txt'),
-            ('sub1/copy_multi_page1_2.txt'),
-            ('sub1/copy_multi_page1_3.txt'),
-            ('single_page1_1.txt'),
+            ('sub1/copy_multi_page1_text_1.txt'),
+            ('sub1/copy_multi_page1_error_1.txt'),
+            ('sub1/copy_multi_page1_text_2.txt'),
+            ('sub1/copy_multi_page1_error_2.txt'),
+            ('sub1/copy_multi_page1_text_3.txt'),
+            ('sub1/copy_multi_page1_error_3.txt'),
+            ('single_page1_text_1.txt'),
+            ('single_page1_error_1.txt'),
             ('sub2'),
-            ('sub2/copy_single_page1_1.txt'),
-            ('invalid1_-1_error.log')  # -1 is the whole document
+            ('sub2/copy_single_page1_text_1.txt'),
+            ('sub2/copy_single_page1_error_1.txt'),
+            ('invalid1_text_-1.txt'),  # -1 is the whole document
+            ('invalid1_error_-1.txt')
         ]
 
         tmp_files = list(tmp_dir.rglob('*'))
-        assert len(tmp_files) == 11
+        assert len(tmp_files) == 20
 
         for f in tmp_files:
             f = str(f.relative_to(tmp_dir))
             assert f in expected_files
 
     @pytest.mark.parametrize('path,expected', (
-        ('multi_page1_1.txt', {'path': 'multi_page1', 'page': '1'}),
-        ('multi_page1_2.txt', {'path': 'multi_page1', 'page': '2'}),
-        ('multi_page1_3.txt', {'path': 'multi_page1', 'page': '3'}),
-        ('multi_page1_10.txt', {'path': 'multi_page1', 'page': '10'}),
-        ('multi_page1_101.txt', {'path': 'multi_page1', 'page': '101'}),
-        ('s1/s2/doc_1000.txt', {'path': 's1/s2/doc', 'page': '1000'}),
-        ('single_page1_1.txt', {'path': 'single_page1', 'page': '1'}),
-        ('invalid1_doc_error.log', {'path': 'invalid1', 'page': 'doc'}),
-        ('invalid1_-10_error.log', {'path': 'invalid1', 'page': '-10'}),
-        ('invalid1_10_error.log', {'path': 'invalid1', 'page': '10'}),
+        ('multi_page1_text_1.txt',
+            {'path': 'multi_page1', 'page': '1', 'feature': 'text'}),
+        ('multi_page1_text_2.txt',
+            {'path': 'multi_page1', 'page': '2', 'feature': 'text'}),
+        ('multi_page1_text_3.txt',
+            {'path': 'multi_page1', 'page': '3', 'feature': 'text'}),
+        ('multi_page1_text_10.txt',
+            {'path': 'multi_page1', 'page': '10', 'feature': 'text'}),
+        ('multi_page1_doc_101.txt',
+            {'path': 'multi_page1', 'page': '101', 'feature': 'doc'}),
+        ('s1/s2/doc_img_1000.txt',
+            {'path': 's1/s2/doc', 'page': '1000', 'feature': 'img'}),
+        ('single_page1_my-feature_1.txt',
+            {'path': 'single_page1', 'page': '1', 'feature': 'my-feature'}),
+        ('invalid1_error_-10.txt',
+            {'path': 'invalid1', 'page': '-10', 'feature': 'error'}),
+        ('invalid1_error_10.txt',
+            {'path': 'invalid1', 'page': '10', 'feature': 'error'}),
     ))
     def test_path_pattern(self, path, expected):
         result = re.match(TextExtraction._path_pat, path)
