@@ -5,9 +5,28 @@ import pytest
 import pandas as pd
 from pdf2dataset import TextExtraction, extract_text
 
+from .testing_dataframe import check_and_compare
+
+
+SAMPLES_DIR = 'tests/samples'
+
 
 @pytest.fixture
 def expected_all():
+
+    def read_img(path, page):
+        if page == -1:
+            return b''
+
+        path = Path(path).with_suffix('')
+        img_name = f'{path}_{page}.jpeg'
+        img_path = Path(SAMPLES_DIR) / img_name
+
+        with open(img_path, 'rb') as f:
+            img_bin = f.read()
+
+        return img_bin
+
     rows = [
         ['path', 'page', 'text', 'error_bool'],
 
@@ -23,58 +42,47 @@ def expected_all():
     ]
 
     names = rows.pop(0)
-    all_ = {n: r for n, r in zip(names, zip(*rows))}
+    expected_dict = {n: r for n, r in zip(names, zip(*rows))}
 
-    return pd.DataFrame(all_)
+    df = pd.DataFrame(expected_dict)
+    df['image'] = df.apply(lambda row: read_img(row.path, row.page), axis=1)
 
-
-def check_df(df, use_ocr, expected=None):
-    'Check dataframe based on samples folder'
-
-    def check_error_msg(error):
-        if error is not None:
-            assert 'Traceback' in error
-
-            pdftotext_error_msg = 'poppler error creating document'
-            assert (pdftotext_error_msg in error) != use_ocr
-
-    if expected is None:
-        expected = expected_all
-
-    df['error'].apply(check_error_msg)
-    df['error_bool'] = df.pop('error').apply(bool)
-
-    columns = list(df.columns)
-    df.sort_values(by=columns, inplace=True)
-    expected.sort_values(by=columns, inplace=True)
-
-    assert (df.values == expected.values).all()
+    return df
 
 
 class TestExtraction:
 
-    @pytest.mark.parametrize('use_ocr', (
+    @pytest.mark.parametrize('is_ocr', (
         True,
         False,
     ))
-    def test_extraction_big(self, tmp_path, use_ocr, expected_all):
+    def test_extraction_big(self, tmp_path, is_ocr, expected_all):
         result_path = tmp_path / 'result.parquet.gzip'
 
-        extract_text('tests/samples', result_path, lang='eng', ocr=use_ocr)
+        extract_text(SAMPLES_DIR, result_path,
+                     lang='eng', ocr=is_ocr, img=True)
 
         df = pd.read_parquet(result_path, engine='fastparquet')
-        check_df(df, use_ocr, expected_all)
+        check_and_compare(df, expected_all, is_ocr=is_ocr)
 
-    @pytest.mark.parametrize('use_ocr', (
+    @pytest.mark.parametrize('is_ocr', (
         True,
         False,
     ))
-    def test_extraction_small(self, tmp_path, use_ocr, expected_all):
-        df = extract_text('tests/samples', small=True, lang='eng', ocr=use_ocr)
-        check_df(df, use_ocr, expected_all)
+    def test_extraction_small(self, is_ocr, expected_all):
+        df = extract_text(SAMPLES_DIR,
+                          small=True, lang='eng', ocr=is_ocr, img=True)
+
+        check_and_compare(df, expected_all, is_ocr=is_ocr)
+
+    def test_disable_img(self, expected_all):
+        df = extract_text(SAMPLES_DIR, small=True, lang='eng')
+
+        expected = expected_all[['path', 'text', 'page', 'error_bool']]
+        check_and_compare(df, expected)
 
     def test_return_list(self):
-        texts_list = extract_text('tests/samples',
+        texts_list = extract_text(SAMPLES_DIR,
                                   return_list=True, lang='eng')
 
         texts_list = sorted(texts_list, key=lambda x: len(x))
@@ -102,7 +110,7 @@ class TestExtraction:
         result_path = tmp_path / 'result.parquet.gzip'
         tmp_dir = Path(tmpdir.mkdir('tmp'))
 
-        extract_text('tests/samples', result_path, tmp_dir=tmp_dir, lang='eng')
+        extract_text(SAMPLES_DIR, result_path, tmp_dir=tmp_dir, lang='eng')
 
         features = ['text', 'error']
         folders = ['sub1', 'sub2']
@@ -172,13 +180,13 @@ class TestExtractionNotDir:
             ('pdf2.pdf', pdf2_bin, 3),  # Just page 3
         ]
 
-        expected = {
+        expected_dict = {
             'path': ['pdf2.pdf', '2.pdf', 'doc1.pdf'],
             'page': [3, 2, 1],
             'text': ['Third page', 'Second page', 'My beautiful sample!'],
-            'error_bool': [False, False, False],
+            'error': [None, None, None],
         }
-        expected = pd.DataFrame(expected)
+        expected = pd.DataFrame(expected_dict)
 
         if small:
             df = extract_text(tasks=tasks, small=small)
@@ -188,4 +196,4 @@ class TestExtractionNotDir:
 
             df = pd.read_parquet(result_path, engine='fastparquet')
 
-        check_df(df, False, expected)
+        check_and_compare(df, expected, list(expected.columns))
