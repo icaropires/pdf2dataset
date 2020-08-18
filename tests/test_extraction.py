@@ -51,7 +51,7 @@ def expected_all():
     return df
 
 
-class TestExtraction:
+class TestExtractionCore:
 
     @pytest.mark.parametrize('is_ocr', (
         True,
@@ -61,51 +61,10 @@ class TestExtraction:
         result_path = tmp_path / 'result.parquet.gzip'
 
         extract_text(SAMPLES_DIR, result_path,
-                     lang='eng', ocr=is_ocr, add_img_column=True)
+                     lang='eng', ocr=is_ocr, features='all')
 
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
         check_and_compare(df, expected_all, is_ocr=is_ocr)
-
-    @pytest.mark.parametrize('is_ocr', (
-        True,
-        False,
-    ))
-    def test_extraction_small(self, is_ocr, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True,
-                          lang='eng', ocr=is_ocr, add_img_column=True)
-
-        check_and_compare(df, expected_all, is_ocr=is_ocr)
-
-    def test_disable_img(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True, lang='eng')
-
-        expected = expected_all[['path', 'text', 'page', 'error_bool']]
-        check_and_compare(df, expected)
-
-    def test_return_list(self):
-        texts_list = extract_text(SAMPLES_DIR,
-                                  return_list=True, lang='eng')
-
-        texts_list = sorted(texts_list, key=lambda x: len(x))
-
-        expected = [
-            # invalid1.pdf
-            [None],
-
-            # single_page.pdf
-            ['My beautiful sample!'],
-
-            # sub2/copy_single_page.pdf
-            ['My beautiful sample!'],
-
-            # multi_page.pdf
-            ['First page', 'Second page', 'Third page'],
-
-            # sub1/copy_multi_page.pdf
-            ['First page', 'Second page', 'Third page'],
-        ]
-
-        assert texts_list == expected
 
     def test_tmpdir(self, tmp_path, tmpdir):
         result_path = tmp_path / 'result.parquet.gzip'
@@ -116,18 +75,18 @@ class TestExtraction:
         features = ['text', 'error']
         folders = ['sub1', 'sub2']
         prefix_pages = (
-            ('multi_page1', [1, 2, 3]),
-            ('single_page1', [1]),
-            ('sub1/copy_multi_page1', [1, 2, 3]),
-            ('sub2/copy_single_page1', [1]),
-            ('invalid1', [-1]),
-        )
+                ('multi_page1', [1, 2, 3]),
+                ('single_page1', [1]),
+                ('sub1/copy_multi_page1', [1, 2, 3]),
+                ('sub2/copy_single_page1', [1]),
+                ('invalid1', [-1]),
+                )
 
         expected_files = [
-            f'{prefix}_{feature}_{page}.txt'
-            for prefix, pages in prefix_pages
-            for page in pages
-            for feature in features
+                f'{prefix}_{feature}_{page}.txt'
+                for prefix, pages in prefix_pages
+                for page in pages
+                for feature in features
         ]
 
         expected_files += folders
@@ -162,13 +121,72 @@ class TestExtraction:
         assert result.groupdict() == expected
 
 
+class TestExtractionSmall:
+    @pytest.mark.parametrize('is_ocr', (
+        True,
+        False,
+    ))
+    def test_extraction_small(self, is_ocr, expected_all):
+        df = extract_text(SAMPLES_DIR, small=True,
+                          lang='eng', ocr=is_ocr, features='all')
+
+        check_and_compare(df, expected_all, is_ocr=is_ocr)
+
+    def test_return_list(self):
+        texts_list = extract_text(SAMPLES_DIR,
+                                  return_list=True, lang='eng')
+
+        texts_list = sorted(texts_list, key=lambda x: len(x))
+
+        expected = [
+            # invalid1.pdf
+            [None],
+
+            # single_page.pdf
+            ['My beautiful sample!'],
+
+            # sub2/copy_single_page.pdf
+            ['My beautiful sample!'],
+
+            # multi_page.pdf
+            ['First page', 'Second page', 'Third page'],
+
+            # sub1/copy_multi_page.pdf
+            ['First page', 'Second page', 'Third page'],
+        ]
+
+        assert texts_list == expected
+
+
+class TestFeaturesParams:
+    def test_no_text(self, expected_all):
+        df = extract_text(SAMPLES_DIR, small=True,
+                          lang='eng', features='image')
+
+        columns = [c for c in expected_all.columns if c != 'text']
+        check_and_compare(df, expected_all[columns])
+
+    def test_no_img(self, expected_all):
+        df = extract_text(SAMPLES_DIR, small=True,
+                          lang='eng', features='text')
+
+        columns = [c for c in expected_all.columns if c != 'image']
+        check_and_compare(df, expected_all[columns])
+
+    def test_none(self, expected_all):
+        df = extract_text(SAMPLES_DIR, small=True, lang='eng', features='')
+
+        columns = ['path', 'page', 'error_bool']
+        check_and_compare(df, expected_all[columns])
+
+
 class TestExtractionNotDir:
 
     @pytest.mark.parametrize('small', (
         True,
         False,
     ))
-    def test_pass_tasks(self, tmp_path, small):
+    def test_passing_tasks(self, tmp_path, small):
         with open('tests/samples/single_page1.pdf', 'rb') as f:
             pdf1_bin = f.read()
 

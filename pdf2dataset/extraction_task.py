@@ -1,4 +1,5 @@
 import io
+import itertools as it
 import os
 import traceback
 import copy
@@ -15,30 +16,28 @@ from PIL import Image
 class ExtractionTask:
 
     _extractmethods_prefix = 'extract_'
+    _fixed_featues = ['doc', 'page']
+
+    # Refers to some real feature but will never be returned as result,
+    # useful to methods use its value
+    _tmp_features_redirect = {
+        'image_original': 'image'
+    }
+
+    _img_format = 'jpeg'
 
     def __init__(self, doc, page, doc_bin=None, *, lang='por',
-                 ocr=False, img=False, img_size=None):
+                 ocr=False, features='text', img_size=None):
         self.doc = doc
         self.doc_bin = doc_bin
         self.page = page
         self.lang = lang
         self.ocr = ocr
-        self.img = img
         self.img_size = img_size
+        self._features = {}
+        self._errors = {}
 
-        self._features = {'doc': str(self.doc), 'page': self.page}
-        self._errors = {'doc': None, 'page': None}
-
-        # TODO: loop
-        self._features['text'] = None
-        self._errors['text'] = None
-
-        if self.img:
-            self._features['image'] = None
-            self._errors['image'] = None
-
-        self._tmp_features = {'image_original': 'image'}
-        self._init_tmp_features()
+        self._init_all_features(features)
         self._gen_tmpfeatures_methods()
 
     def load_bin(self, enforce=False):
@@ -54,13 +53,18 @@ class ExtractionTask:
     def copy(self):
         return copy.deepcopy(self)
 
-    def _init_tmp_features(self):
-        for tmp in self._tmp_features:
-            self._features[tmp] = None
-            self._errors[tmp] = None
+    def is_feature_selected(self, feature):
+        return feature in self._features
+
+    def _init_all_features(self, features):
+        features = it.chain(self._fixed_featues, features,
+                            self._tmp_features_redirect)
+
+        self._features = {f: None for f in features}
+        self._errors = copy.deepcopy(self._features)
 
     def _pop_tmp_features(self):
-        keys = list(self._tmp_features)
+        keys = list(self._tmp_features_redirect)
 
         for tmp in keys:
             self._features.pop(tmp)  # Changing dict size
@@ -70,7 +74,7 @@ class ExtractionTask:
         def get_matching(matching):
             return getattr(self, self._get_extractmethod(matching))
 
-        for tmp, matching in self._tmp_features.items():
+        for tmp, matching in self._tmp_features_redirect.items():
             setattr(self, self._get_extractmethod(tmp), get_matching(matching))
 
     @classmethod
@@ -85,6 +89,11 @@ class ExtractionTask:
             self._features[feature], self._errors[feature] = extract_method()
 
         return self._features[feature], self._errors[feature]
+
+    def _check_result_fixedfeatures(self):
+        for fixed in self._fixed_featues:
+            error_msg = f'Missing {fixed} in results'
+            assert fixed in self._features, error_msg
 
     def _preprocess_img(self, img):
         img = np.array(img.convert('L'))
@@ -134,26 +143,32 @@ class ExtractionTask:
 
         return text, error
 
-    @staticmethod
-    def _img_to_bytes(img):
+    @classmethod
+    def _img_to_bytes(cls, img):
         img_stream = io.BytesIO()
-        img.save(img_stream, 'jpeg')
+        img.save(img_stream, cls._img_format)
 
         return img_stream.getvalue()
+
+    def extract_page(self):
+        return self.page, None
+
+    def extract_doc(self):
+        return str(self.doc), None
 
     def extract_image(self):
         img, error = None, None
 
         try:
             imgs = convert_from_bytes(
-                self.doc_bin,
-                first_page=self.page, single_file=True, fmt='jpeg'
+                self.doc_bin, first_page=self.page,
+                single_file=True, fmt=self._img_format
             )
             img = imgs[0]
 
             self._features['image_original'] = self._img_to_bytes(img)
 
-            if self.img:
+            if self.is_feature_selected('image'):
                 self._features['image'] = self._features['image_original']
 
             if self.img_size:
@@ -177,16 +192,16 @@ class ExtractionTask:
                 "'doc_bin' can't be empty for processing the task"
             )
 
-        # TODO: make it meta!
-        self._features['text'], _ = self._get_feature('text')
+        for feature in self._features:
+            self._features[feature], _ = self._get_feature(feature)
 
-        if self.img:
-            self._features['image'], _ = self._get_feature('image')
-
+        # TODO: improve
         error = '\n\n\n\n'.join(
             f'{f}:\n{e}' for f, e in self._errors.items() if e
         )
         error = error or None
 
         self._pop_tmp_features()
+        self._check_result_fixedfeatures()
+
         return {**self._features, 'error': error}

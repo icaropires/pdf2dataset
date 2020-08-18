@@ -17,6 +17,7 @@ from pathlib import Path
 import pdftotext
 
 from .extraction_task import ExtractionTask
+from .constants import POSSIBLE_FEATURES  # TODO: calculate
 
 
 # TODO: Some day I will reduce this file size!!
@@ -32,10 +33,9 @@ class TextExtraction:
 
     def __init__(
         self, input_dir, results_file='', *,
-        tmp_dir='', lang='por', ocr=False, small=False,
-        add_img_column=False, img_size=None,
-        chunksize=None, chunk_df_size=10000, check_inputdir=True,
-        max_docs_memory=3000, **ray_params
+        tmp_dir='', lang='por', ocr=False, small=False, features='text',
+        img_size=None, chunksize=None, chunk_df_size=10000,
+        check_inputdir=True, max_docs_memory=3000, **ray_params
     ):
 
         self.input_dir = Path(input_dir).resolve()
@@ -64,12 +64,32 @@ class TextExtraction:
         self.small = small
         self.lang = lang
         self.ocr = ocr
-        self.img = add_img_column
+        self.features = self._parse_featues(features)
         self.img_size = img_size.lower() if img_size is not None else None
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
 
         self._df_lock = threading.Lock()
+        self._validate_features_param()
+
+    @staticmethod
+    def _parse_featues(features):
+        if features == '':
+            return []
+
+        if features != 'all':
+            return features.split(',')
+
+        not_extracted_features = [
+            f for f in POSSIBLE_FEATURES if f
+            not in ['path', 'doc', 'page', 'error']
+        ]
+
+        return not_extracted_features
+
+    def _validate_features_param(self):
+        for feature in self.features:
+            assert feature in POSSIBLE_FEATURES, f'Invalid feature: {feature}'
 
     @staticmethod
     def get_docs(input_dir):
@@ -180,10 +200,12 @@ class TextExtraction:
             )
 
             for doc, range_pages in zip(docs, results):
+
                 new_tasks = [
-                    ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr,
-                                   img=self.img,
-                                   img_size=self.img_size)
+                    ExtractionTask(
+                        doc, p, lang=self.lang, ocr=self.ocr,
+                        features=self.features, img_size=self.img_size
+                    )
                     for p in range_pages
                 ]
                 tasks += new_tasks

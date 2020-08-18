@@ -18,6 +18,18 @@ def main():
         help='File to save the resultant dataframe'
     )
     parser.add_argument(
+        '--features',
+        type=str,
+        default='text',
+        help=(
+            'Specify a comma separated list with the features you want to'
+            " extract. 'path' and 'page' will always be added."
+            " Example 1: --features=text,image"
+            " Example 2: --features=all"
+            ' Available features to add: text, image'
+        )
+    )
+    parser.add_argument(
         '--tmp-dir',
         type=str,
         default='',
@@ -42,17 +54,14 @@ def main():
         help="Chunksize to use while processing pages, otherwise is calculated"
     )
     parser.add_argument(
-        '--add-img-column',
-        type=bool,
-        default=False,
-        help=('Add an extra column with the encoded image to the ',
-              'dataframe. default: false')
-    )
-    parser.add_argument(
         '--img-size',
         type=str,
         default=None,
-        help='Image size for resize before encode. Example: --img-size 224x224'
+        help=(
+            'If adding image feature, image will be resized to this size.'
+            " Provide two integers separated by 'x'."
+            ' Example: --img-size 1000x1414'
+        )
     )
 
     # Ray

@@ -35,8 +35,9 @@ class TestingDataFrame:
             if error:
                 assert 'Traceback' in error
 
-                pdftotext_error_msg = 'poppler error creating document'
-                assert (pdftotext_error_msg in error) != is_ocr
+                if 'text' in self._df.columns:
+                    pdftotext_error_msg = 'poppler error creating document'
+                    assert (pdftotext_error_msg in error) != is_ocr
 
         self._df['error'].apply(check_error_msg)
 
