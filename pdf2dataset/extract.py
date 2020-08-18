@@ -10,7 +10,7 @@ from multiprocessing import Pool
 from more_itertools import ichunked
 
 import pandas as pd
-import fastparquet
+import dask.dataframe as dd
 import ray
 from tqdm import tqdm
 from pathlib import Path
@@ -64,11 +64,12 @@ class TextExtraction:
         self.small = small
         self.lang = lang
         self.ocr = ocr
-        self.add_img_column = add_img_column
-        self.img_size = img_size
+        self.img = add_img_column
+        self.img_size = img_size.lower() if img_size is not None else None
         self.max_docs_memory = max_docs_memory
-        self._df_lock = threading.Lock()
         self.chunk_df_size = chunk_df_size
+
+        self._df_lock = threading.Lock()
 
     @staticmethod
     def get_docs(input_dir):
@@ -137,13 +138,11 @@ class TextExtraction:
 
     def _append_to_df(self, results):
         df = self._to_df(results)
+        df = dd.from_pandas(df, npartitions=1)
 
         with self._df_lock:
-            fastparquet.write(
-                str(self.results_file), df,
-                file_scheme='hive', compression='gzip',
-                append=self.results_file.exists()
-            )
+            df.to_parquet(self.results_file, compression='gzip',
+                          append=self.results_file.exists(), engine='pyarrow')
 
     @staticmethod
     def _get_pages_range(doc, doc_bin=None):
@@ -183,7 +182,7 @@ class TextExtraction:
             for doc, range_pages in zip(docs, results):
                 new_tasks = [
                     ExtractionTask(doc, p, lang=self.lang, ocr=self.ocr,
-                                   img_column=self.add_img_column,
+                                   img=self.img,
                                    img_size=self.img_size)
                     for p in range_pages
                 ]
@@ -208,7 +207,7 @@ class TextExtraction:
             paths = {f: self._get_feature_path(task.doc, task.page, f)
                      for f in features if f not in ['path', 'page']}
 
-            result = {f: p.read_text() for f, p in paths.items()}
+            result = {f: p.read_text() or None for f, p in paths.items()}
             result['doc'] = task.doc
             result['page'] = task.page
 
@@ -271,10 +270,11 @@ class TextExtraction:
 
             try:
                 chunk = next(chunks)
-                chunk = [self._load_task_bin(t) for t in chunk]
-                rest.append(self.process_chunk_ray.remote(chunk))
             except StopIteration:
                 ...
+            else:
+                chunk = [self._load_task_bin(t) for t in chunk]
+                rest.append(self.process_chunk_ray.remote(chunk))
 
             futures = rest
 

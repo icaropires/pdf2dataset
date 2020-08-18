@@ -1,3 +1,7 @@
+import copy
+from hashlib import md5
+
+
 class TestingDataFrame:
     def __init__(self, df):
         self._df = df
@@ -9,6 +13,12 @@ class TestingDataFrame:
 
         return f'Columns: {columns}\n{values}'
 
+    def _hash_images(self):
+        if 'image' in self._df.columns:
+            self._df['image'] = self._df['image'].apply(
+                lambda c: md5(c.encode()).hexdigest() if c else None
+            )
+
     def _pop_error_columns(self):
         for column in ('error', 'error_bool'):
             if column in self._df.columns:
@@ -17,10 +27,8 @@ class TestingDataFrame:
     def sort(self):
         columns = sorted(self._df.columns)
 
+        self._df.sort_values(by=columns, inplace=True)
         self._df = self._df[columns]
-        sorted_df = self._df.sort_values(by=columns)
-
-        return TestingDataFrame(sorted_df)
 
     def check_errors(self, is_ocr):
         def check_error_msg(error):
@@ -44,19 +52,25 @@ class TestingDataFrame:
 
         return (self_values == other_values).all()
 
-    def assert_equal(self, other):
-        self_copy = self.sort()
-        other_copy = other.sort()
+    def assert_equal(self, expected):
+        self_cp = copy.deepcopy(self)
+        expected_cp = copy.deepcopy(expected)
 
-        self_copy._assert_equal_errors(other_copy)
-        self_copy._pop_error_columns()
-        other_copy._pop_error_columns()
+        self_cp._assert_equal_errors(expected_cp)
+        self_cp._pop_error_columns()
+        expected_cp._pop_error_columns()
+
+        self_cp._hash_images()
+        expected_cp._hash_images()
+
+        self_cp.sort()
+        expected_cp.sort()
 
         # Making debug easier
-        assert sorted(self_copy._df.columns) == sorted(other_copy._df.columns)
-        assert self_copy._df.shape == other_copy._df.shape
+        assert list(self_cp._df.columns) == list(expected_cp._df.columns)
+        assert self_cp._df.shape == expected_cp._df.shape
 
-        assert (self_copy._df.values == other_copy._df.values).all()
+        assert (self_cp._df.values == expected_cp._df.values).all()
 
     def check_and_compare(self, expected, is_ocr=False):
         self.check_errors(is_ocr)

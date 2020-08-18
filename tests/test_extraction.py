@@ -9,6 +9,7 @@ from .testing_dataframe import check_and_compare
 
 
 SAMPLES_DIR = 'tests/samples'
+PARQUET_ENGINE = 'pyarrow'
 
 
 @pytest.fixture
@@ -16,7 +17,7 @@ def expected_all():
 
     def read_img(path, page):
         if page == -1:
-            return b''
+            return None
 
         path = Path(path).with_suffix('')
         img_name = f'{path}_{page}.jpeg'
@@ -60,9 +61,9 @@ class TestExtraction:
         result_path = tmp_path / 'result.parquet.gzip'
 
         extract_text(SAMPLES_DIR, result_path,
-                     lang='eng', ocr=is_ocr, img=True)
+                     lang='eng', ocr=is_ocr, add_img_column=True)
 
-        df = pd.read_parquet(result_path, engine='fastparquet')
+        df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
     @pytest.mark.parametrize('is_ocr', (
@@ -70,8 +71,8 @@ class TestExtraction:
         False,
     ))
     def test_extraction_small(self, is_ocr, expected_all):
-        df = extract_text(SAMPLES_DIR,
-                          small=True, lang='eng', ocr=is_ocr, img=True)
+        df = extract_text(SAMPLES_DIR, small=True,
+                          lang='eng', ocr=is_ocr, add_img_column=True)
 
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
@@ -194,6 +195,6 @@ class TestExtractionNotDir:
             result_path = tmp_path / 'result.parquet.gzip'
             extract_text(tasks, result_path)
 
-            df = pd.read_parquet(result_path, engine='fastparquet')
+            df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
 
         check_and_compare(df, expected, list(expected.columns))
