@@ -1,8 +1,9 @@
 import io
-import itertools as it
 import os
 import traceback
-import copy
+from copy import deepcopy
+from itertools import chain
+from inspect import getmembers, isroutine
 from functools import wraps
 
 import numpy as np
@@ -16,24 +17,44 @@ from PIL import Image
 
 class ExtractionTask:
 
+    fixed_featues = ('path', 'page')
+
     _extractmethods_prefix = 'extract_'
-    _fixed_featues = ['doc', 'page']
     _helper_features = ('image_original',)
 
     _image_format = 'jpeg'
 
-    def __init__(self, doc, page, doc_bin=None, *, lang='por',
+    def __init__(self, path, page, doc_bin=None, *, lang='por',
                  ocr=False, features='text', image_size=None):
-        self.doc = doc
+        self.path = path
         self.doc_bin = doc_bin
         self.page = page
         self.lang = lang
         self.ocr = ocr
         self.image_size = image_size
+
         self._features = {}
         self._errors = {}
 
         self._init_all_features(features)
+
+    @classmethod
+    def _get_extractmethod(cls, feature):
+        return cls._extractmethods_prefix + feature
+
+    @classmethod
+    def list_features(cls):
+        prefix = cls._extractmethods_prefix
+
+        class_routines = getmembers(cls, predicate=isroutine)
+        extraction_methods = (
+            n for n, _ in class_routines if n.startswith(prefix)
+        )
+
+        features = (n[len(prefix):] for n in extraction_methods)
+        features = [n for n in features if n not in cls._helper_features]
+
+        return features
 
     def load_bin(self, enforce=False):
         '''
@@ -43,10 +64,10 @@ class ExtractionTask:
         task might not have access to the document in his filesystem
         '''
         if enforce or not self.doc_bin:
-            self.doc_bin = self.doc.read_bytes()
+            self.doc_bin = self.path.read_bytes()
 
     def copy(self):
-        return copy.deepcopy(self)
+        return deepcopy(self)
 
     def is_feature_selected(self, feature):
         return feature in self._features
@@ -71,19 +92,14 @@ class ExtractionTask:
         return decorator
 
     def _init_all_features(self, features):
-        features = it.chain(self._fixed_featues,
-                            self._helper_features, features)
+        features = chain(self.fixed_featues, self._helper_features, features)
 
         self._features = {f: None for f in features}
-        self._errors = copy.deepcopy(self._features)
+        self._errors = deepcopy(self._features)
 
     def _pop_helper_features(self):
         for helper in self._helper_features:
             self._features.pop(helper)
-
-    @classmethod
-    def _get_extractmethod(cls, feature):
-        return cls._extractmethods_prefix + feature
 
     def _get_feature(self, feature):
         extract_method_name = self._get_extractmethod(feature)
@@ -95,7 +111,7 @@ class ExtractionTask:
         return self._features[feature], self._errors[feature]
 
     def _check_result_fixedfeatures(self):
-        for fixed in self._fixed_featues:
+        for fixed in self.fixed_featues:
             error_msg = f'Missing {fixed} in results'
             assert fixed in self._features, error_msg
 
@@ -171,8 +187,8 @@ class ExtractionTask:
         return self.page
 
     @extraction_method()
-    def extract_doc(self):
-        return str(self.doc)
+    def extract_path(self):
+        return str(self.path)
 
     @extraction_method()
     def extract_image(self):
@@ -198,7 +214,7 @@ class ExtractionTask:
     def process(self):
         if not self.doc_bin:
             raise RuntimeError(
-                "'doc_bin' can't be empty for processing the task"
+                "'doc_bin' can't be empty for processing the task!"
             )
 
         for feature in self._features:

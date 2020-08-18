@@ -1,5 +1,7 @@
 import argparse
+
 from . import TextExtraction
+from .extraction_task import ExtractionTask
 
 
 def main():
@@ -17,6 +19,10 @@ def main():
         default='df.parquet.gzip',
         help='File to save the resultant dataframe'
     )
+
+    all_features = ExtractionTask.list_features()
+    fixed_featues = ExtractionTask.fixed_featues
+    available_featues = ', '.join(set(all_features) - set(fixed_featues))
     parser.add_argument(
         '--features',
         type=str,
@@ -24,11 +30,12 @@ def main():
         help=(
             'Specify a comma separated list with the features you want to'
             " extract. 'path' and 'page' will always be added."
-            " Example 1: --features=text,image"
-            " Example 2: --features=all"
-            ' Available features to add: text, image'
+            ' Example 1: --features=text,image'
+            ' Example 2: --features=all'
+            f' Available features to add: {available_featues}'
         )
     )
+
     parser.add_argument(
         '--tmp-dir',
         type=str,
@@ -54,13 +61,13 @@ def main():
         help="Chunksize to use while processing pages, otherwise is calculated"
     )
     parser.add_argument(
-        '--img-size',
+        '--image-size',
         type=str,
         default=None,
         help=(
             'If adding image feature, image will be resized to this size.'
             " Provide two integers separated by 'x'."
-            ' Example: --img-size 1000x1414'
+            ' Example: --image-size 1000x1414'
         )
     )
 

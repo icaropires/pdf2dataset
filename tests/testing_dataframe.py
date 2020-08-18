@@ -44,7 +44,7 @@ class TestingDataFrame:
     def _assert_equal_errors(self, other):
         check_column = 'error'
 
-        if 'error' not in other._df.columns:
+        if check_column not in other._df.columns:
             self._df['error_bool'] = self._df.pop('error').apply(bool)
             check_column = 'error_bool'
 
@@ -61,6 +61,7 @@ class TestingDataFrame:
         self_cp._pop_error_columns()
         expected_cp._pop_error_columns()
 
+        # Improve visualization for debugging
         self_cp._hash_images()
         expected_cp._hash_images()
 

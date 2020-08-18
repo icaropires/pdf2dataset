@@ -17,27 +17,27 @@ from pathlib import Path
 import pdftotext
 
 from .extraction_task import ExtractionTask
-from .constants import POSSIBLE_FEATURES  # TODO: calculate
 
 
 # TODO: Some day I will reduce this file size!!
 
-# TODO: Add typing
+# TODO: Add typing?
 # TODO: Set up a logger to the class
 # TODO: Substitute most (all?) prints for logs
-# TODO: Create a 'task result' namedtuple
 
 
 class TextExtraction:
     _path_pat = r'(?P<path>.+)_(?P<feature>(\w|-)+)_(?P<page>-?\d+)\.txt'
 
     def __init__(
-        self, input_dir, results_file='', *,
-        tmp_dir='', lang='por', ocr=False, small=False, features='text',
-        image_size=None, chunksize=None, chunk_df_size=10000,
-        check_inputdir=True, max_docs_memory=3000, **ray_params
-    ):
+        self, input_dir, results_file='', *, tmp_dir='',
+        chunksize=None, chunk_df_size=10000,
+        check_inputdir=True, max_docs_memory=3000, task_class=ExtractionTask,
 
+        lang='por', ocr=False, small=False, features='text', image_size=None,
+
+        **ray_params
+    ):
         self.input_dir = Path(input_dir).resolve()
         self.results_file = Path(results_file).resolve()
 
@@ -58,39 +58,36 @@ class TextExtraction:
         # Keep str and not Path, custom behaviour if is empty string
         self.tmp_dir = tmp_dir
 
+        self.task_class = task_class
         self.num_cpus = ray_params.get('num_cpus') or os.cpu_count()
         self.ray_params = ray_params
         self.chunksize = chunksize
         self.small = small
         self.lang = lang
         self.ocr = ocr
-        self.features = self._parse_featues(features)
-        self.image_size = (image_size.lower() if image_size is not None
-                           else None)
+        self.image_size = (image_size.lower() if image_size else None)
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
+
+        self.features = self._parse_featues(features)
 
         self._df_lock = threading.Lock()
         self._validate_features_param()
 
-    @staticmethod
-    def _parse_featues(features):
+    def _parse_featues(self, features):
         if features == '':
             return []
 
-        if features != 'all':
-            return features.split(',')
+        if features == 'all':
+            return self.task_class.list_features()
 
-        not_extracted_features = [
-            f for f in POSSIBLE_FEATURES if f
-            not in ['path', 'doc', 'page', 'error']
-        ]
-
-        return not_extracted_features
+        return features.split(',')
 
     def _validate_features_param(self):
+        possible_features = self.task_class.list_features()
+
         for feature in self.features:
-            assert feature in POSSIBLE_FEATURES, f'Invalid feature: {feature}'
+            assert feature in possible_features, f'Invalid feature: {feature}'
 
     @staticmethod
     def get_docs(input_dir):
@@ -108,39 +105,38 @@ class TextExtraction:
 
         return out_path
 
-    def _get_feature_path(self, doc, page, feature):
-        output_path = self._get_output_path(Path(doc))
+    def _get_feature_path(self, path, page, feature):
+        output_path = self._get_output_path(Path(path))
         basename = f'{output_path.stem}_{feature}_{page}.txt'
 
         return output_path.with_name(basename)
 
-    @staticmethod
-    def _preprocess_path(df):
-        parsed = df['path'].str.extract(TextExtraction._path_pat)
+    @classmethod
+    def _preprocess_path(cls, df):
+        parsed = df['path'].str.extract(cls._path_pat)
         df['path'] = parsed['path'] + '.pdf'
 
         return df
 
     def _doc_to_path(self, df):
-        any_feature = 'doc'
+        any_feature = 'path'
 
         def gen_path(row):
-            path = self._get_feature_path(row.doc, row.page, any_feature)
+            path = self._get_feature_path(row.path, row.page, any_feature)
             return str(path)
 
         df['path'] = df.apply(gen_path, axis=1)
-        df.pop('doc')
 
         return df
 
     def _save_tmp_files(self, result):
         for feature in result:
-            if feature in ['doc', 'page']:
+            if feature in ['path', 'page']:
                 continue
 
             # TODO: save any format, not just text
-            doc, page = result['doc'], result['page']
-            path = self._get_feature_path(doc, page, feature)
+            path, page = result['path'], result['page']
+            path = self._get_feature_path(path, page, feature)
             content = result[feature] or ''
 
             Path(path).write_text(content)
@@ -152,7 +148,7 @@ class TextExtraction:
         df = self._preprocess_path(df)
 
         # Keep path and page as first columns
-        begin = ['path', 'page']
+        begin = list(self.task_class.fixed_featues)
         columns = begin + [c for c in df.columns.to_list() if c not in begin]
 
         return df[columns]
@@ -166,13 +162,13 @@ class TextExtraction:
                           append=self.results_file.exists(), engine='pyarrow')
 
     @staticmethod
-    def _get_pages_range(doc, doc_bin=None):
+    def _get_pages_range(path, doc_bin=None):
         # Using pdftotext to get num_pages because it's the best way I know
         # pdftotext extracts lazy, so this won't process the text
 
         try:
             if not doc_bin:
-                with doc.open('rb') as f:
+                with path.open('rb') as f:
                     num_pages = len(pdftotext.PDF(f))
             else:
                 with io.BytesIO(doc_bin) as f:
@@ -200,11 +196,11 @@ class TextExtraction:
                 self._get_pages_range, docs, chunksize=chunksize
             )
 
-            for doc, range_pages in zip(docs, results):
+            for path, range_pages in zip(docs, results):
 
                 new_tasks = [
-                    ExtractionTask(
-                        doc, p, lang=self.lang, ocr=self.ocr,
+                    self.task_class(
+                        path, p, lang=self.lang, ocr=self.ocr,
                         features=self.features, image_size=self.image_size
                     )
                     for p in range_pages
@@ -227,11 +223,11 @@ class TextExtraction:
         features = self._get_features_list(processed[0])
 
         def load(task):
-            paths = {f: self._get_feature_path(task.doc, task.page, f)
+            paths = {f: self._get_feature_path(task.path, task.page, f)
                      for f in features if f not in ['path', 'page']}
 
             result = {f: p.read_text() or None for f, p in paths.items()}
-            result['doc'] = task.doc
+            result['path'] = task.path
             result['page'] = task.page
 
             return result
@@ -243,8 +239,10 @@ class TextExtraction:
 
         processed, not_processed = [], []
         for task in tasks:
-            paths = (self._get_feature_path(task.doc, task.page, f)
-                     for f in features if f not in ['path', 'page'])
+            paths = (
+                self._get_feature_path(task.path, task.page, f) for f in
+                features if f not in self.task_class.fixed_featues
+            )
 
             if all(p.exists() for p in paths):
                 processed.append(task)
