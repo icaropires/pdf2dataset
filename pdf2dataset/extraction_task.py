@@ -3,6 +3,7 @@ import itertools as it
 import os
 import traceback
 import copy
+from functools import wraps
 
 import numpy as np
 import pytesseract
@@ -17,28 +18,22 @@ class ExtractionTask:
 
     _extractmethods_prefix = 'extract_'
     _fixed_featues = ['doc', 'page']
+    _helper_features = ('image_original',)
 
-    # Refers to some real feature but will never be returned as result,
-    # useful to methods use its value
-    _tmp_features_redirect = {
-        'image_original': 'image'
-    }
-
-    _img_format = 'jpeg'
+    _image_format = 'jpeg'
 
     def __init__(self, doc, page, doc_bin=None, *, lang='por',
-                 ocr=False, features='text', img_size=None):
+                 ocr=False, features='text', image_size=None):
         self.doc = doc
         self.doc_bin = doc_bin
         self.page = page
         self.lang = lang
         self.ocr = ocr
-        self.img_size = img_size
+        self.image_size = image_size
         self._features = {}
         self._errors = {}
 
         self._init_all_features(features)
-        self._gen_tmpfeatures_methods()
 
     def load_bin(self, enforce=False):
         '''
@@ -56,26 +51,35 @@ class ExtractionTask:
     def is_feature_selected(self, feature):
         return feature in self._features
 
+    def extraction_method(*exceptions):
+        exceptions = exceptions or tuple()
+        exceptions = tuple(exceptions)
+
+        def decorator(extraction_method):
+            @wraps(extraction_method)
+            def inner(*args, **kwargs):
+                result, error = None, None
+
+                try:
+                    result = extraction_method(*args, **kwargs)
+                except exceptions:
+                    error = traceback.format_exc()
+
+                return result, error
+            return inner
+
+        return decorator
+
     def _init_all_features(self, features):
-        features = it.chain(self._fixed_featues, features,
-                            self._tmp_features_redirect)
+        features = it.chain(self._fixed_featues,
+                            self._helper_features, features)
 
         self._features = {f: None for f in features}
         self._errors = copy.deepcopy(self._features)
 
-    def _pop_tmp_features(self):
-        keys = list(self._tmp_features_redirect)
-
-        for tmp in keys:
-            self._features.pop(tmp)  # Changing dict size
-
-    def _gen_tmpfeatures_methods(self):
-        # Can't be lambda, not pickle serializable
-        def get_matching(matching):
-            return getattr(self, self._get_extractmethod(matching))
-
-        for tmp, matching in self._tmp_features_redirect.items():
-            setattr(self, self._get_extractmethod(tmp), get_matching(matching))
+    def _pop_helper_features(self):
+        for helper in self._helper_features:
+            self._features.pop(helper)
 
     @classmethod
     def _get_extractmethod(cls, feature):
@@ -95,91 +99,96 @@ class ExtractionTask:
             error_msg = f'Missing {fixed} in results'
             assert fixed in self._features, error_msg
 
-    def _preprocess_img(self, img):
-        img = np.array(img.convert('L'))
-        img = cv2.adaptiveThreshold(
-            img, 255,
+    def _gen_errors_string(self):
+        features_errors = (f'{f}:\n{e}' for f, e in self._errors.items() if e)
+        all_errors = '\n\n\n'.join(features_errors)
+
+        return all_errors or None
+
+    def _ocr_image(self, image):
+        # So pytesseract uses only one core per worker
+        os.environ['OMP_THREAD_LIMIT'] = '1'
+        return pytesseract.image_to_string(image, lang=self.lang)
+
+    def _preprocess_image(self, image):
+        image = np.array(image.convert('L'))
+        image = cv2.adaptiveThreshold(
+            image, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
             cv2.THRESH_BINARY,
             97, 50
         )
 
-        img = cv2.erode(
-            img,
+        image = cv2.erode(
+            image,
             cv2.getStructuringElement(cv2.MORPH_CROSS, (2, 2)),
             iterations=1
         )
 
-        return img
-
-    def _ocr_img(self, img):
-        # So pytesseract uses only one core per worker
-        os.environ['OMP_THREAD_LIMIT'] = '1'
-        return pytesseract.image_to_string(img, lang=self.lang)
-
-    def _extract_text_ocr(self):
-        img_bytes, error = self._get_feature('image_original')
-
-        if error:
-            return None, error
-
-        img = Image.open(io.BytesIO(img_bytes))
-
-        img_preprocessed = self._preprocess_img(img)
-        text = self._ocr_img(img_preprocessed)
-
-        img.close()
-        return text, None
-
-    def _extract_text_native(self):
-        text, error = None, None
-
-        try:
-            with io.BytesIO(self.doc_bin) as f:
-                pages = pdftotext.PDF(f)
-                text = pages[self.page-1]
-        except pdftotext.Error:
-            error = traceback.format_exc()
-
-        return text, error
+        return image
 
     @classmethod
-    def _img_to_bytes(cls, img):
-        img_stream = io.BytesIO()
-        img.save(img_stream, cls._img_format)
+    def _image_to_bytes(cls, image):
+        image_stream = io.BytesIO()
+        image.save(image_stream, cls._image_format)
 
-        return img_stream.getvalue()
+        return image_stream.getvalue()
 
+    def _extract_text_ocr(self):
+        image_bytes, error = self._get_feature('image_original')
+
+        if not image_bytes:
+            return None
+
+        image = Image.open(io.BytesIO(image_bytes))
+
+        image_preprocessed = self._preprocess_image(image)
+        text = self._ocr_image(image_preprocessed)
+
+        image.close()
+        return text
+
+    def _extract_text_native(self):
+        with io.BytesIO(self.doc_bin) as f:
+            pages = pdftotext.PDF(f)
+            text = pages[self.page-1]
+
+        return text
+
+    @extraction_method(PDFPageCountError, PDFSyntaxError)
+    def extract_image_original(self):
+        images = convert_from_bytes(
+            self.doc_bin, first_page=self.page,
+            single_file=True, fmt=self._image_format
+        )
+
+        image_bytes = self._image_to_bytes(images[0])
+
+        return image_bytes
+
+    @extraction_method()
     def extract_page(self):
-        return self.page, None
+        return self.page
 
+    @extraction_method()
     def extract_doc(self):
-        return str(self.doc), None
+        return str(self.doc)
 
+    @extraction_method()
     def extract_image(self):
-        img, error = None, None
+        image_bytes, error = self._get_feature('image_original')
 
-        try:
-            imgs = convert_from_bytes(
-                self.doc_bin, first_page=self.page,
-                single_file=True, fmt=self._img_format
-            )
-            img = imgs[0]
+        if not image_bytes:
+            return None
 
-            self._features['image_original'] = self._img_to_bytes(img)
+        if self.image_size:
+            image = Image.open(io.BytesIO(image_bytes))
+            image_size = tuple(int(x) for x in self.image_size.split('x'))
+            image_bytes = self._image_to_bytes(image.resize(image_size))
 
-            if self.is_feature_selected('image'):
-                self._features['image'] = self._features['image_original']
+        return image_bytes
 
-            if self.img_size:
-                img_size = tuple(int(x) for x in self.img_size.split('x'))
-                self._features['image'] = img.resize(img_size)
-
-        except (PDFPageCountError, PDFSyntaxError):
-            error = traceback.format_exc()
-
-        return self._features['image_original'], error
-
+    @extraction_method(pdftotext.Error)
     def extract_text(self):
         if self.ocr:
             return self._extract_text_ocr()
@@ -195,13 +204,7 @@ class ExtractionTask:
         for feature in self._features:
             self._features[feature], _ = self._get_feature(feature)
 
-        # TODO: improve
-        error = '\n\n\n\n'.join(
-            f'{f}:\n{e}' for f, e in self._errors.items() if e
-        )
-        error = error or None
-
-        self._pop_tmp_features()
+        self._pop_helper_features()
         self._check_result_fixedfeatures()
 
-        return {**self._features, 'error': error}
+        return {**self._features, 'error': self._gen_errors_string()}

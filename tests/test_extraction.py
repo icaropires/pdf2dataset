@@ -15,18 +15,18 @@ PARQUET_ENGINE = 'pyarrow'
 @pytest.fixture
 def expected_all():
 
-    def read_img(path, page):
+    def read_image(path, page):
         if page == -1:
             return None
 
         path = Path(path).with_suffix('')
-        img_name = f'{path}_{page}.jpeg'
-        img_path = Path(SAMPLES_DIR) / img_name
+        image_name = f'{path}_{page}.jpeg'
+        image_path = Path(SAMPLES_DIR) / image_name
 
-        with open(img_path, 'rb') as f:
-            img_bin = f.read()
+        with open(image_path, 'rb') as f:
+            image_bin = f.read()
 
-        return img_bin
+        return image_bin
 
     rows = [
         ['path', 'page', 'text', 'error_bool'],
@@ -46,7 +46,7 @@ def expected_all():
     expected_dict = {n: r for n, r in zip(names, zip(*rows))}
 
     df = pd.DataFrame(expected_dict)
-    df['image'] = df.apply(lambda row: read_img(row.path, row.page), axis=1)
+    df['image'] = df.apply(lambda row: read_image(row.path, row.page), axis=1)
 
     return df
 
@@ -107,8 +107,8 @@ class TestExtractionCore:
             {'path': 'multi_page1', 'page': '10', 'feature': 'text'}),
         ('multi_page1_doc_101.txt',
             {'path': 'multi_page1', 'page': '101', 'feature': 'doc'}),
-        ('s1/s2/doc_img_1000.txt',
-            {'path': 's1/s2/doc', 'page': '1000', 'feature': 'img'}),
+        ('s1/s2/doc_image_1000.txt',
+            {'path': 's1/s2/doc', 'page': '1000', 'feature': 'image'}),
         ('single_page1_my-feature_1.txt',
             {'path': 'single_page1', 'page': '1', 'feature': 'my-feature'}),
         ('invalid1_error_-10.txt',
@@ -166,7 +166,7 @@ class TestFeaturesParams:
         columns = [c for c in expected_all.columns if c != 'text']
         check_and_compare(df, expected_all[columns])
 
-    def test_no_img(self, expected_all):
+    def test_no_image(self, expected_all):
         df = extract_text(SAMPLES_DIR, small=True,
                           lang='eng', features='text')
 

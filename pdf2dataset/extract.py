@@ -34,7 +34,7 @@ class TextExtraction:
     def __init__(
         self, input_dir, results_file='', *,
         tmp_dir='', lang='por', ocr=False, small=False, features='text',
-        img_size=None, chunksize=None, chunk_df_size=10000,
+        image_size=None, chunksize=None, chunk_df_size=10000,
         check_inputdir=True, max_docs_memory=3000, **ray_params
     ):
 
@@ -65,7 +65,8 @@ class TextExtraction:
         self.lang = lang
         self.ocr = ocr
         self.features = self._parse_featues(features)
-        self.img_size = img_size.lower() if img_size is not None else None
+        self.image_size = (image_size.lower() if image_size is not None
+                           else None)
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
 
@@ -204,7 +205,7 @@ class TextExtraction:
                 new_tasks = [
                     ExtractionTask(
                         doc, p, lang=self.lang, ocr=self.ocr,
-                        features=self.features, img_size=self.img_size
+                        features=self.features, image_size=self.image_size
                     )
                     for p in range_pages
                 ]
