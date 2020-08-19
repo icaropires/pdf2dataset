@@ -5,7 +5,7 @@ from hashlib import md5
 class TestingDataFrame:
     def __init__(self, df):
         self._df = df
-        self._df = self._df.fillna('').astype('str').astype(str)
+        self._df = self._df.fillna('').astype('str')
 
     def __repr__(self):
         columns = ', '.join(self._df.columns)

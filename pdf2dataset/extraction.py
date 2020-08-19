@@ -26,7 +26,7 @@ from .extraction_task import ExtractionTask
 # TODO: Substitute most (all?) prints for logs
 
 
-class TextExtraction:
+class Extraction:
     _path_pat = r'(?P<path>.+)_(?P<feature>(\w|-)+)_(?P<page>-?\d+)\.txt'
 
     def __init__(
@@ -34,7 +34,7 @@ class TextExtraction:
         small=False, check_inputdir=True, chunksize=None, chunk_df_size=10000,
         max_docs_memory=3000, task_class=ExtractionTask,
 
-        ocr=False, ocr_image_size=None, ocr_lang='por', features='text',
+        ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
         image_format='jpeg', image_size=None,
 
         **ray_params
@@ -160,6 +160,9 @@ class TextExtraction:
         return df
 
     def _save_tmp_files(self, result):
+        # TODO: Reenable feature
+        raise NotImplementedError('For now, this feature is unavailable')
+
         for feature in result:
             if feature in ['path', 'page']:
                 continue
@@ -169,7 +172,7 @@ class TextExtraction:
             path = self._get_feature_path(path, page, feature)
             content = result[feature] or ''
 
-            Path(path).write_text(content)
+            Path(path).write_bytes(content)
 
     def _to_df(self, results):
         df = pd.DataFrame(results)

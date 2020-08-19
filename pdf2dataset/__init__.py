@@ -1,5 +1,6 @@
-from .utils import extract_text
-from .extract import TextExtraction
-from .extract_not_dir import TextExtractionNotDir
+from .utils import extract, extract_text
+from .extraction import Extraction
+from .extraction_memory import ExtractionFromMemory
+from .extraction_task import ExtractionTask
 
-__all__ = ['TextExtraction', 'TextExtractionNotDir', 'extract_text']
+__all__ = ['Extraction', 'ExtractionFromMemory', 'extract', 'extract_text']

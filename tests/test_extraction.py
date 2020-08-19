@@ -1,11 +1,13 @@
 from io import BytesIO
 import re
 from pathlib import Path
+from hashlib import md5
 
 import pytest
 import pandas as pd
-from pdf2dataset import TextExtraction, extract_text
 from PIL import Image
+
+from pdf2dataset import Extraction, ExtractionTask, extract, extract_text
 
 from .testing_dataframe import check_and_compare
 
@@ -62,41 +64,42 @@ class TestExtractionCore:
     def test_extraction_big(self, tmp_path, is_ocr, expected_all):
         result_path = tmp_path / 'result.parquet.gzip'
 
-        extract_text(SAMPLES_DIR, result_path,
-                     ocr_lang='eng', ocr=is_ocr, features='all')
+        extract(SAMPLES_DIR, result_path,
+                ocr_lang='eng', ocr=is_ocr, features='all')
 
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
-    def test_tmpdir(self, tmp_path, tmpdir):
-        result_path = tmp_path / 'result.parquet.gzip'
-        tmp_dir = Path(tmpdir.mkdir('tmp'))
+    # TODO: Reenable feature
+    # def test_tmpdir(self, tmp_path, tmpdir):
+    #     result_path = tmp_path / 'result.parquet.gzip'
+    #     tmp_dir = Path(tmpdir.mkdir('tmp'))
 
-        extract_text(SAMPLES_DIR, result_path, tmp_dir=tmp_dir)
+    #     extract(SAMPLES_DIR, result_path, tmp_dir=tmp_dir)
 
-        features = ['text', 'error']
-        folders = ['sub1', 'sub2']
-        prefix_pages = (
-            ('multi_page1', [1, 2, 3]),
-            ('single_page1', [1]),
-            ('sub1/copy_multi_page1', [1, 2, 3]),
-            ('sub2/copy_single_page1', [1]),
-            ('invalid1', [-1]),
-        )
+    #     features = ['text', 'error']
+    #     folders = ['sub1', 'sub2']
+    #     prefix_pages = (
+    #         ('multi_page1', [1, 2, 3]),
+    #         ('single_page1', [1]),
+    #         ('sub1/copy_multi_page1', [1, 2, 3]),
+    #         ('sub2/copy_single_page1', [1]),
+    #         ('invalid1', [-1]),
+    #     )
 
-        expected_files = [
-                f'{prefix}_{feature}_{page}.txt'
-                for prefix, pages in prefix_pages
-                for page in pages
-                for feature in features
-        ]
+    #     expected_files = [
+    #             f'{prefix}_{feature}_{page}.txt'
+    #             for prefix, pages in prefix_pages
+    #             for page in pages
+    #             for feature in features
+    #     ]
 
-        expected_files += folders
+    #     expected_files += folders
 
-        tmp_files = list(tmp_dir.rglob('*'))
-        tmp_files = [str(f.relative_to(tmp_dir)) for f in tmp_files]
+    #     tmp_files = list(tmp_dir.rglob('*'))
+    #     tmp_files = [str(f.relative_to(tmp_dir)) for f in tmp_files]
 
-        assert sorted(tmp_files) == sorted(expected_files)
+    #     assert sorted(tmp_files) == sorted(expected_files)
 
     @pytest.mark.parametrize('path,expected', (
         ('multi_page1_text_1.txt',
@@ -119,7 +122,7 @@ class TestExtractionCore:
             {'path': 'invalid1', 'page': '10', 'feature': 'error'}),
     ))
     def test_path_pattern(self, path, expected):
-        result = re.match(TextExtraction._path_pat, path)
+        result = re.match(Extraction._path_pat, path)
         assert result.groupdict() == expected
 
 
@@ -129,53 +132,88 @@ class TestExtractionSmall:
         False,
     ))
     def test_extraction_small(self, is_ocr, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True,
-                          ocr_lang='eng', ocr=is_ocr, features='all')
+        df = extract(SAMPLES_DIR, small=True, ocr_lang='eng', ocr=is_ocr)
 
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
     def test_return_list(self):
-        texts_list = extract_text(SAMPLES_DIR, return_list=True)
+        def sort(doc):
+            try:
+                first_page_idx, text_idx = 0, 1
 
-        texts_list = sorted(texts_list, key=lambda x: len(x))
+                return len(doc[first_page_idx][text_idx])
+            except TypeError:
+                return -1  # For None values
 
+        def hash_images(doc):
+            for page_idx, page in enumerate(doc):
+                image, text = page
+                image = md5(image).hexdigest() if image is not None else None
+
+                doc[page_idx] = [image, text]
+
+            return doc
+
+        list_ = extract(SAMPLES_DIR, return_list=True)
+        list_ = [hash_images(doc) for doc in list_]
+
+        # Expected structure:
+        #   expected: list[doc],
+        #   doc: list[page],
+        #   page: list[feature]
+        #
+        # list[feature] is sorted by feature name (not value!)
         expected = [
             # invalid1.pdf
-            [None],
+            [[None, None]],
 
             # single_page.pdf
-            ['My beautiful sample!'],
+            [['975f5049aac2d0b0e85e0083657182fd', 'My beautiful sample!']],
 
             # sub2/copy_single_page.pdf
-            ['My beautiful sample!'],
+            [['975f5049aac2d0b0e85e0083657182fd', 'My beautiful sample!']],
 
             # multi_page.pdf
-            ['First page', 'Second page', 'Third page'],
+            [['5f005131323536c524e0fffa7ab42d0f', 'First page'],
+                ['fce06f79de9ca575212152873cb161ea', 'Second page'],
+                ['6dacd3629627df0d99ebc5da97b310b2', 'Third page']],
 
             # sub1/copy_multi_page.pdf
-            ['First page', 'Second page', 'Third page'],
+            [['5f005131323536c524e0fffa7ab42d0f', 'First page'],
+                ['fce06f79de9ca575212152873cb161ea', 'Second page'],
+                ['6dacd3629627df0d99ebc5da97b310b2', 'Third page']],
         ]
 
-        assert texts_list == expected
+        assert sorted(list_, key=sort) == sorted(expected, key=sort)
 
 
 class TestParams:
     def test_no_text(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True, features='image')
+        available_features = ExtractionTask.list_features()
+        features = list(set(available_features) - set(['text']))
+
+        df = extract(SAMPLES_DIR, small=True, features=features)
 
         columns = [c for c in expected_all.columns if c != 'text']
         check_and_compare(df, expected_all[columns])
 
     def test_no_image(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True, features='text')
+        available_features = ExtractionTask.list_features()
+        features = list(set(available_features) - set(['image']))
+
+        df = extract(SAMPLES_DIR, small=True, features=features)
 
         columns = [c for c in expected_all.columns if c != 'image']
         check_and_compare(df, expected_all[columns])
 
-    def test_none(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True, features='')
+    def test_features_as_list(self, expected_all):
+        df = extract(SAMPLES_DIR, small=True, features=['text', 'image'])
+        check_and_compare(df, expected_all)
 
-        columns = ['path', 'page', 'error_bool']
+    def test_none(self, expected_all):
+        df = extract(SAMPLES_DIR, small=True, features='')
+
+        columns = list(ExtractionTask.fixed_featues) + ['error_bool']
         check_and_compare(df, expected_all[columns])
 
     @pytest.mark.parametrize('size', (
@@ -184,8 +222,8 @@ class TestParams:
         ('10x100'),
     ))
     def test_image_resize(self, size):
-        df = extract_text(SAMPLES_DIR, image_size=size,
-                          small=True, features='image')
+        df = extract(SAMPLES_DIR, image_size=size,
+                     small=True, features='image')
 
         img_bytes = df['image'].dropna().iloc[0]
         img = Image.open(BytesIO(img_bytes))
@@ -200,8 +238,8 @@ class TestParams:
         'png',
     ))
     def test_image_format(self, format_):
-        df = extract_text(SAMPLES_DIR, image_format=format_,
-                          small=True, features='image')
+        df = extract(SAMPLES_DIR, image_format=format_,
+                     small=True, features='image')
 
         img_bytes = df['image'].dropna().iloc[0]
         img = Image.open(BytesIO(img_bytes))
@@ -215,7 +253,7 @@ class TestParams:
     def test_low_ocr_image(self, expected_all, ocr_image_size, is_low):
         df = extract_text(
             SAMPLES_DIR, small=True, ocr=True,
-            ocr_image_size=ocr_image_size, ocr_lang='eng', features='text',
+            ocr_image_size=ocr_image_size, ocr_lang='eng'
         )
 
         df = df.dropna(subset=['text'])
@@ -233,7 +271,7 @@ class TestParams:
             assert serie.text == expected_serie.text
 
 
-class TestExtractionNotDir:
+class TestExtractionFromMemory:
 
     @pytest.mark.parametrize('small', (
         True,

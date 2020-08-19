@@ -1,10 +1,10 @@
 from pathlib import Path
 
-from .extract import TextExtraction
+from .extraction import Extraction
 from .extraction_task import ExtractionTask
 
 
-class TextExtractionNotDir(TextExtraction):
+class ExtractionFromMemory(Extraction):
 
     def __init__(self, tasks, *args, **kwargs):
         self.tasks = tasks
@@ -19,7 +19,7 @@ class TextExtractionNotDir(TextExtraction):
         ''' Generate ExtractionTask from simplified tasks.
 
         Assumes is not a big volume, otherwise should save documents to
-        a directory and use 'TextExtraction'. So, not going with
+        a directory and use 'Extraction'. So, not going with
         multiprocessing here.
         '''
 

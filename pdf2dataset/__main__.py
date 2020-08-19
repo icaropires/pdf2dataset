@@ -1,9 +1,10 @@
 import argparse
 
-from . import TextExtraction
+from . import Extraction
 from .extraction_task import ExtractionTask
 
 
+# TODO: use click
 def main():
     parser = argparse.ArgumentParser(
         description='Extract text from all PDF files in a directory'
@@ -24,7 +25,7 @@ def main():
     parser.add_argument(
         '--features',
         type=str,
-        default='text',
+        default='all',
         help=(
             'Specify a comma separated list with the features you want to'
             " extract. 'path' and 'page' will always be added."
@@ -41,7 +42,7 @@ def main():
               ' intermediate files')
     )
     parser.add_argument(
-        '--lang',
+        '--ocr-lang',
         type=str,
         default='por',
         help='Tesseract language'
@@ -78,7 +79,7 @@ def main():
     )
     parser.add_argument(
         '--image-format',
-        type=int,
+        type=str,
         default='jpeg',
         help=(
             'Format of the image generated from the PDF pages'
@@ -111,7 +112,7 @@ def main():
 
     args = parser.parse_args()
 
-    extraction = TextExtraction(**vars(args))
+    extraction = Extraction(**vars(args))
     extraction.apply()
 
     print(f"Results saved to '{extraction.results_file}'!")
