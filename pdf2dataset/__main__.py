@@ -67,6 +67,23 @@ def main():
             ' Example: --image-size 1000x1414'
         )
     )
+    parser.add_argument(
+        '--ocr-image-size',
+        type=int,
+        default=None,
+        help=(
+            'The height of the image OCR will be applied.'
+            ' Width will be adjusted to keep the ratio.'
+        )
+    )
+    parser.add_argument(
+        '--image-format',
+        type=int,
+        default='jpeg',
+        help=(
+            'Format of the image generated from the PDF pages'
+        )
+    )
 
     # Ray
     parser.add_argument(

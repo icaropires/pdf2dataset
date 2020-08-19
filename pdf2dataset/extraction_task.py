@@ -22,16 +22,19 @@ class ExtractionTask:
     _extractmethods_prefix = 'extract_'
     _helper_features = ('image_original',)
 
-    _image_format = 'jpeg'
-
-    def __init__(self, path, page, doc_bin=None, *, lang='por',
-                 ocr=False, features='text', image_size=None):
+    def __init__(
+        self, path, page, doc_bin=None, *, features='text',
+        ocr=False, ocr_image_size=None, lang='por',
+        image_format='jpeg', image_size=None
+    ):
         self.path = path
         self.doc_bin = doc_bin
         self.page = page
         self.lang = lang
         self.ocr = ocr
+        self.ocr_image_size = ocr_image_size
         self.image_size = image_size
+        self.image_format = image_format
 
         self._features = {}
         self._errors = {}
@@ -74,25 +77,6 @@ class ExtractionTask:
 
     def is_feature_selected(self, feature):
         return feature in self._features
-
-    def extraction_method(*exceptions):
-        exceptions = exceptions or tuple()
-        exceptions = tuple(exceptions)
-
-        def decorator(extraction_method):
-            @wraps(extraction_method)
-            def inner(*args, **kwargs):
-                result, error = None, None
-
-                try:
-                    result = extraction_method(*args, **kwargs)
-                except exceptions:
-                    error = traceback.format_exc()
-
-                return result, error
-            return inner
-
-        return decorator
 
     def _init_all_features(self, features):
         features = chain(self.fixed_featues, self._helper_features, features)
@@ -146,10 +130,9 @@ class ExtractionTask:
 
         return image
 
-    @classmethod
-    def _image_to_bytes(cls, image):
+    def _image_to_bytes(self, image):
         image_stream = io.BytesIO()
-        image.save(image_stream, cls._image_format)
+        image.save(image_stream, self.image_format)
 
         return image_stream.getvalue()
 
@@ -174,11 +157,31 @@ class ExtractionTask:
 
         return text
 
+    def extraction_method(*exceptions):
+        exceptions = exceptions or tuple()
+        exceptions = tuple(exceptions)
+
+        def decorator(extraction_method):
+            @wraps(extraction_method)
+            def inner(*args, **kwargs):
+                result, error = None, None
+
+                try:
+                    result = extraction_method(*args, **kwargs)
+                except exceptions:
+                    error = traceback.format_exc()
+
+                return result, error
+            return inner
+
+        return decorator
+
     @extraction_method(PDFPageCountError, PDFSyntaxError)
     def extract_image_original(self):
         images = convert_from_bytes(
             self.doc_bin, first_page=self.page,
-            single_file=True, fmt=self._image_format
+            single_file=True, fmt=self.image_format,
+            size=(None, self.ocr_image_size)
         )
 
         image_bytes = self._image_to_bytes(images[0])

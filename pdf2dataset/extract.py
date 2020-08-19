@@ -31,10 +31,11 @@ class TextExtraction:
 
     def __init__(
         self, input_dir, results_file='', *, tmp_dir='',
-        chunksize=None, chunk_df_size=10000,
-        check_inputdir=True, max_docs_memory=3000, task_class=ExtractionTask,
+        small=False, check_inputdir=True, chunksize=None, chunk_df_size=10000,
+        max_docs_memory=3000, task_class=ExtractionTask,
 
-        lang='por', ocr=False, small=False, features='text', image_size=None,
+        ocr=False, ocr_image_size=None, lang='por', features='text',
+        image_format='jpeg', image_size=None,
 
         **ray_params
     ):
@@ -65,8 +66,10 @@ class TextExtraction:
         self.small = small
         self.lang = lang
         self.ocr = ocr
+        self.ocr_image_size = ocr_image_size
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
+        self.image_format = image_format
 
         self.image_size = self._parse_image_size(image_size)
         self.features = self._parse_featues(features)
@@ -225,8 +228,10 @@ class TextExtraction:
 
                 new_tasks = [
                     self.task_class(
-                        path, p, lang=self.lang, ocr=self.ocr,
-                        features=self.features, image_size=self.image_size
+                        path, p, lang=self.lang,
+                        ocr=self.ocr, ocr_image_size=self.ocr_image_size,
+                        features=self.features, image_format=self.image_format,
+                        image_size=self.image_size
                     )
                     for p in range_pages
                 ]

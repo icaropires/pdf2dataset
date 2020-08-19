@@ -72,7 +72,7 @@ class TestExtractionCore:
         result_path = tmp_path / 'result.parquet.gzip'
         tmp_dir = Path(tmpdir.mkdir('tmp'))
 
-        extract_text(SAMPLES_DIR, result_path, tmp_dir=tmp_dir, lang='eng')
+        extract_text(SAMPLES_DIR, result_path, tmp_dir=tmp_dir)
 
         features = ['text', 'error']
         folders = ['sub1', 'sub2']
@@ -135,8 +135,7 @@ class TestExtractionSmall:
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
     def test_return_list(self):
-        texts_list = extract_text(SAMPLES_DIR,
-                                  return_list=True, lang='eng')
+        texts_list = extract_text(SAMPLES_DIR, return_list=True)
 
         texts_list = sorted(texts_list, key=lambda x: len(x))
 
@@ -160,23 +159,21 @@ class TestExtractionSmall:
         assert texts_list == expected
 
 
-class TestFeaturesParams:
+class TestParams:
     def test_no_text(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True,
-                          lang='eng', features='image')
+        df = extract_text(SAMPLES_DIR, small=True, features='image')
 
         columns = [c for c in expected_all.columns if c != 'text']
         check_and_compare(df, expected_all[columns])
 
     def test_no_image(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True,
-                          lang='eng', features='text')
+        df = extract_text(SAMPLES_DIR, small=True, features='text')
 
         columns = [c for c in expected_all.columns if c != 'image']
         check_and_compare(df, expected_all[columns])
 
     def test_none(self, expected_all):
-        df = extract_text(SAMPLES_DIR, small=True, lang='eng', features='')
+        df = extract_text(SAMPLES_DIR, small=True, features='')
 
         columns = ['path', 'page', 'error_bool']
         check_and_compare(df, expected_all[columns])
@@ -187,10 +184,8 @@ class TestFeaturesParams:
         ('10x100'),
     ))
     def test_image_resize(self, size):
-        df = extract_text(
-            SAMPLES_DIR, image_size=size,
-            small=True, lang='eng', features='image'
-        )
+        df = extract_text(SAMPLES_DIR, image_size=size,
+                          small=True, features='image')
 
         img_bytes = df['image'].dropna().iloc[0]
         img = Image.open(BytesIO(img_bytes))
@@ -199,6 +194,43 @@ class TestFeaturesParams:
         width, height = map(int, size.split('x'))
 
         assert img.size == (width, height)
+
+    @pytest.mark.parametrize('format_', (
+        'jpeg',
+        'png',
+    ))
+    def test_image_format(self, format_):
+        df = extract_text(SAMPLES_DIR, image_format=format_,
+                          small=True, features='image')
+
+        img_bytes = df['image'].dropna().iloc[0]
+        img = Image.open(BytesIO(img_bytes))
+
+        assert img.format.upper() == format_.upper()
+
+    @pytest.mark.parametrize('ocr_image_size,is_low', (
+        (200, True),
+        (2000, False),
+    ))
+    def test_low_ocr_image(self, expected_all, ocr_image_size, is_low):
+        df = extract_text(
+            SAMPLES_DIR, small=True, ocr=True,
+            ocr_image_size=ocr_image_size, lang='eng', features='text',
+        )
+
+        df = df.dropna(subset=['text'])
+        serie = df.iloc[0]
+
+        expected = expected_all.dropna(subset=['text'])
+        expected = expected[(expected.path == serie.path)
+                            & (expected.page == serie.page)]
+
+        expected_serie = expected.iloc[0]
+
+        if is_low:
+            assert serie.text != expected_serie.text
+        else:
+            assert serie.text == expected_serie.text
 
 
 class TestExtractionNotDir:
