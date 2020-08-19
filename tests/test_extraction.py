@@ -1,9 +1,11 @@
+from io import BytesIO
 import re
 from pathlib import Path
 
 import pytest
 import pandas as pd
 from pdf2dataset import TextExtraction, extract_text
+from PIL import Image
 
 from .testing_dataframe import check_and_compare
 
@@ -75,12 +77,12 @@ class TestExtractionCore:
         features = ['text', 'error']
         folders = ['sub1', 'sub2']
         prefix_pages = (
-                ('multi_page1', [1, 2, 3]),
-                ('single_page1', [1]),
-                ('sub1/copy_multi_page1', [1, 2, 3]),
-                ('sub2/copy_single_page1', [1]),
-                ('invalid1', [-1]),
-                )
+            ('multi_page1', [1, 2, 3]),
+            ('single_page1', [1]),
+            ('sub1/copy_multi_page1', [1, 2, 3]),
+            ('sub2/copy_single_page1', [1]),
+            ('invalid1', [-1]),
+        )
 
         expected_files = [
                 f'{prefix}_{feature}_{page}.txt'
@@ -178,6 +180,25 @@ class TestFeaturesParams:
 
         columns = ['path', 'page', 'error_bool']
         check_and_compare(df, expected_all[columns])
+
+    @pytest.mark.parametrize('size', (
+        ('10x10'),
+        ('10X10'),
+        ('10x100'),
+    ))
+    def test_image_resize(self, size):
+        df = extract_text(
+            SAMPLES_DIR, image_size=size,
+            small=True, lang='eng', features='image'
+        )
+
+        img_bytes = df['image'].dropna().iloc[0]
+        img = Image.open(BytesIO(img_bytes))
+
+        size = size.lower()
+        width, height = map(int, size.split('x'))
+
+        assert img.size == (width, height)
 
 
 class TestExtractionNotDir:

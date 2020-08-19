@@ -43,7 +43,7 @@ class ExtractionTask:
         return cls._extractmethods_prefix + feature
 
     @classmethod
-    def list_features(cls):
+    def list_features(cls, *, exclude_fixed=True):
         prefix = cls._extractmethods_prefix
 
         class_routines = getmembers(cls, predicate=isroutine)
@@ -53,6 +53,9 @@ class ExtractionTask:
 
         features = (n[len(prefix):] for n in extraction_methods)
         features = [n for n in features if n not in cls._helper_features]
+
+        if exclude_fixed:
+            features = list(set(features) - set(cls.fixed_featues))
 
         return features
 
@@ -199,8 +202,8 @@ class ExtractionTask:
 
         if self.image_size:
             image = Image.open(io.BytesIO(image_bytes))
-            image_size = tuple(int(x) for x in self.image_size.split('x'))
-            image_bytes = self._image_to_bytes(image.resize(image_size))
+            size = self.image_size
+            image_bytes = self._image_to_bytes(image.resize(size))
 
         return image_bytes
 

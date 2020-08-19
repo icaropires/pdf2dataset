@@ -20,9 +20,7 @@ def main():
         help='File to save the resultant dataframe'
     )
 
-    all_features = ExtractionTask.list_features()
-    fixed_featues = ExtractionTask.fixed_featues
-    available_featues = ', '.join(set(all_features) - set(fixed_featues))
+    available_featues = ', '.join(ExtractionTask.list_features())
     parser.add_argument(
         '--features',
         type=str,
@@ -30,9 +28,8 @@ def main():
         help=(
             'Specify a comma separated list with the features you want to'
             " extract. 'path' and 'page' will always be added."
-            ' Example 1: --features=text,image'
-            ' Example 2: --features=all'
             f' Available features to add: {available_featues}'
+            " Examples: '--features=text,image' or '--features=all'"
         )
     )
 
@@ -92,7 +89,7 @@ def main():
         '--redis-password',
         type=str,
         default='5241590000000000',  # Ray default
-        help='Redis password to use to connect with redis'
+        help='Redis password to use to connect with ray'
     )
 
     args = parser.parse_args()

@@ -19,7 +19,7 @@ import pdftotext
 from .extraction_task import ExtractionTask
 
 
-# TODO: Some day I will reduce this file size!!
+# TODO: Eventually, I'll reduce this file size!!
 
 # TODO: Add typing?
 # TODO: Set up a logger to the class
@@ -65,29 +65,54 @@ class TextExtraction:
         self.small = small
         self.lang = lang
         self.ocr = ocr
-        self.image_size = (image_size.lower() if image_size else None)
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
 
+        self.image_size = self._parse_image_size(image_size)
         self.features = self._parse_featues(features)
 
         self._df_lock = threading.Lock()
-        self._validate_features_param()
 
     def _parse_featues(self, features):
-        if features == '':
-            return []
-
-        if features == 'all':
-            return self.task_class.list_features()
-
-        return features.split(',')
-
-    def _validate_features_param(self):
         possible_features = self.task_class.list_features()
 
-        for feature in self.features:
-            assert feature in possible_features, f'Invalid feature: {feature}'
+        if features == '':
+            features = []
+
+        elif features == 'all':
+            features = possible_features
+
+        elif isinstance(features, list):
+            ...
+
+        else:
+            features = features.split(',')
+
+        failed = (f not in possible_features for f in features)
+        if any(failed):
+            features = ','.join(features)
+            possible_features = ','.join(possible_features)
+
+            raise ValueError(
+                f"Invalid feature list: '{features}'"
+                f"\nPossible features are: '{possible_features}'"
+            )
+
+        return features
+
+    @staticmethod
+    def _parse_image_size(image_size_str):
+        if image_size_str is None:
+            return None
+
+        image_size_str = image_size_str.lower()
+
+        try:
+            width, height = map(int, image_size_str.split('x'))
+        except ValueError:
+            raise ValueError(f'Invalid image size parameter: {image_size_str}')
+
+        return width, height
 
     @staticmethod
     def get_docs(input_dir):
