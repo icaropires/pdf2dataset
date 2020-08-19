@@ -24,14 +24,14 @@ class ExtractionTask:
 
     def __init__(
         self, path, page, doc_bin=None, *, features='text',
-        ocr=False, ocr_image_size=None, lang='por',
+        ocr=False, ocr_image_size=None, ocr_lang='por',
         image_format='jpeg', image_size=None
     ):
         self.path = path
         self.doc_bin = doc_bin
         self.page = page
-        self.lang = lang
         self.ocr = ocr
+        self.ocr_lang = ocr_lang
         self.ocr_image_size = ocr_image_size
         self.image_size = image_size
         self.image_format = image_format
@@ -111,7 +111,7 @@ class ExtractionTask:
     def _ocr_image(self, image):
         # So pytesseract uses only one core per worker
         os.environ['OMP_THREAD_LIMIT'] = '1'
-        return pytesseract.image_to_string(image, lang=self.lang)
+        return pytesseract.image_to_string(image, lang=self.ocr_lang)
 
     def _preprocess_image(self, image):
         image = np.array(image.convert('L'))

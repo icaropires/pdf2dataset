@@ -63,7 +63,7 @@ class TestExtractionCore:
         result_path = tmp_path / 'result.parquet.gzip'
 
         extract_text(SAMPLES_DIR, result_path,
-                     lang='eng', ocr=is_ocr, features='all')
+                     ocr_lang='eng', ocr=is_ocr, features='all')
 
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
         check_and_compare(df, expected_all, is_ocr=is_ocr)
@@ -130,7 +130,7 @@ class TestExtractionSmall:
     ))
     def test_extraction_small(self, is_ocr, expected_all):
         df = extract_text(SAMPLES_DIR, small=True,
-                          lang='eng', ocr=is_ocr, features='all')
+                          ocr_lang='eng', ocr=is_ocr, features='all')
 
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
@@ -215,7 +215,7 @@ class TestParams:
     def test_low_ocr_image(self, expected_all, ocr_image_size, is_low):
         df = extract_text(
             SAMPLES_DIR, small=True, ocr=True,
-            ocr_image_size=ocr_image_size, lang='eng', features='text',
+            ocr_image_size=ocr_image_size, ocr_lang='eng', features='text',
         )
 
         df = df.dropna(subset=['text'])

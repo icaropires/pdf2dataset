@@ -60,8 +60,7 @@ class TextExtractionNotDir(TextExtraction):
         new_tasks = []
         for doc, doc_bin, range_pages in tasks:
             new_tasks += [
-                ExtractionTask(doc, p, doc_bin, lang=self.lang,
-                               ocr=self.ocr, features=self.features)
+                ExtractionTask(doc, p, doc_bin, **self.task_params)
                 for p in range_pages
             ]
 

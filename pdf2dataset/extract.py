@@ -34,7 +34,7 @@ class TextExtraction:
         small=False, check_inputdir=True, chunksize=None, chunk_df_size=10000,
         max_docs_memory=3000, task_class=ExtractionTask,
 
-        ocr=False, ocr_image_size=None, lang='por', features='text',
+        ocr=False, ocr_image_size=None, ocr_lang='por', features='text',
         image_format='jpeg', image_size=None,
 
         **ray_params
@@ -59,20 +59,22 @@ class TextExtraction:
         # Keep str and not Path, custom behaviour if is empty string
         self.tmp_dir = tmp_dir
 
-        self.task_class = task_class
         self.num_cpus = ray_params.get('num_cpus') or os.cpu_count()
         self.ray_params = ray_params
         self.chunksize = chunksize
         self.small = small
-        self.lang = lang
-        self.ocr = ocr
-        self.ocr_image_size = ocr_image_size
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
-        self.image_format = image_format
 
-        self.image_size = self._parse_image_size(image_size)
-        self.features = self._parse_featues(features)
+        self.task_class = task_class
+        self.task_params = {
+            'features': self._parse_featues(features),
+            'ocr': ocr,
+            'ocr_lang': ocr_lang,
+            'ocr_image_size': ocr_image_size,
+            'image_format': image_format,
+            'image_size': self._parse_image_size(image_size),
+        }
 
         self._df_lock = threading.Lock()
 
@@ -227,12 +229,7 @@ class TextExtraction:
             for path, range_pages in zip(docs, results):
 
                 new_tasks = [
-                    self.task_class(
-                        path, p, lang=self.lang,
-                        ocr=self.ocr, ocr_image_size=self.ocr_image_size,
-                        features=self.features, image_format=self.image_format,
-                        image_size=self.image_size
-                    )
+                    self.task_class(path, p, **self.task_params)
                     for p in range_pages
                 ]
                 tasks += new_tasks
