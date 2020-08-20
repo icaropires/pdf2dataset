@@ -68,6 +68,10 @@ class TestExtractionCore:
                 ocr_lang='eng', ocr=is_ocr, features='all')
 
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
+
+        if is_ocr:
+            df['text'] = df['text'].str.strip()
+
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
     # TODO: Reenable feature
@@ -133,6 +137,9 @@ class TestExtractionSmall:
     ))
     def test_extraction_small(self, is_ocr, expected_all):
         df = extract(SAMPLES_DIR, small=True, ocr_lang='eng', ocr=is_ocr)
+
+        if is_ocr:
+            df['text'] = df['text'].str.strip()
 
         check_and_compare(df, expected_all, is_ocr=is_ocr)
 
@@ -266,9 +273,9 @@ class TestParams:
         expected_serie = expected.iloc[0]
 
         if is_low:
-            assert serie.text != expected_serie.text
+            assert serie.text.strip() != expected_serie.text.strip()
         else:
-            assert serie.text == expected_serie.text
+            assert serie.text.strip() == expected_serie.text.strip()
 
 
 class TestExtractionFromMemory:
