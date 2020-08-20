@@ -1,6 +1,7 @@
 # pdf2dataset
 
 ![pdf2dataset](https://github.com/icaropires/pdf2dataset/workflows/pdf2dataset/badge.svg)
+[![codecov](https://codecov.io/gh/icaropires/pdf2dataset/branch/master/graph/badge.svg)](https://codecov.io/gh/icaropires/pdf2dataset)
 
 Converts a whole subdirectory with any volume (small or huge) of PDF documents to a dataset (pandas DataFrame) with the columns: path x page x text x error.
 No need to setup any external service (no database, brokers, etc). Just install and run!

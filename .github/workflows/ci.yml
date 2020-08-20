@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.7, 3.8]
+        python-version: [3.6, 3.7, 3.8]
 
     steps:
     - uses: actions/checkout@v2
@@ -26,7 +26,7 @@ jobs:
         sudo apt install -y poppler-utils tesseract-ocr-por build-essential libpoppler-cpp-dev pkg-config python3-dev
         
         python -m pip install --upgrade pip
-        pip install flake8 pytest
+        pip install flake8 pytest pytest-cov
         pip install -r requirements.txt
         
     - name: Lint with flake8
@@ -35,4 +35,7 @@ jobs:
         
     - name: Test with pytest
       run: |
-        pytest
+        pytest --cov=pdf2dataset
+
+    - name: Codecov
+      uses: codecov/codecov-action@v1.0.13
