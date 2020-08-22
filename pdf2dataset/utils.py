@@ -1,7 +1,9 @@
+import sys
 from pathlib import Path
 
 from .extraction import Extraction
 from .extraction_memory import ExtractionFromMemory
+from .pdf_extract_task import PdfExtractTask
 
 
 def _df_to_list(df, extraction):
@@ -20,11 +22,12 @@ def _df_to_list(df, extraction):
 
 
 def extract(*args, return_list=False, **kwargs):
-    input_dir = kwargs.get('input_dir')
+    def is_path(param):
+        return isinstance(param, (str, Path))
 
     kwargs['small'] = True if return_list else kwargs.get('small', False)
 
-    if len(args) and isinstance(args[0], (str, Path)) or input_dir:
+    if args and is_path(args[0]) or kwargs.get('input_dir'):
         extraction = Extraction(*args, **kwargs)
     else:
         extraction = ExtractionFromMemory(*args, **kwargs)
@@ -38,6 +41,24 @@ def extract(*args, return_list=False, **kwargs):
     return df
 
 
-def extract_text(*args, **kwargs):
-    kwargs['features'] = 'text'
-    return extract(*args, **kwargs)
+def gen_helpers(task_class=PdfExtractTask):
+    def helpers_factory(feature):
+        def helper(*args, **kwargs):
+            kwargs['features'] = (feature if feature not in
+                                  task_class.fixed_featues else '')
+
+            return extract(*args, **kwargs)
+
+        return helper
+
+    def gen_helper(feature):
+        method_name = f'extract_{feature}'
+        setattr(sys.modules[__name__], method_name, helpers_factory(feature))
+
+        return method_name
+
+    features = task_class.list_features(exclude_fixed=False)
+    return [gen_helper(feature) for feature in features]
+
+
+HELPERS = gen_helpers()

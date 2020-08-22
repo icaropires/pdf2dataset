@@ -7,13 +7,13 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
+from pathlib import Path
 from more_itertools import ichunked
 
 import pandas as pd
 import dask.dataframe as dd
 import ray
 from tqdm import tqdm
-from pathlib import Path
 import pdftotext
 
 from .pdf_extract_task import PdfExtractTask
@@ -262,6 +262,7 @@ class Extraction:
 
         return task
 
+    @staticmethod
     @ray.remote
     def process_chunk_ray(chunk):
         return [t.process() for t in chunk]
@@ -378,7 +379,7 @@ class Extraction:
         num_tasks = len(tasks)
         tasks = (processed, not_processed)
 
-        if len(processed):
+        if processed:
             logging.warning(
                 f"Skipping {len(processed)} already"
                 f" processed pages in directory '{self.tmp_dir}'"
@@ -392,14 +393,13 @@ class Extraction:
         if self.small:
             return self._apply_to_small(tasks, num_tasks)
 
-        result = None
         try:
             ray.init(**self.ray_params)
-            result = self._apply_to_big(tasks, num_tasks)
+            self._apply_to_big(tasks, num_tasks)
         finally:
             ray.shutdown()
 
-        return result
+        return self.results_file
 
     def apply(self):
         docs = self.get_docs(self.input_dir)

@@ -56,6 +56,34 @@ class ExtractTask(ABC):
         self._init_all_features()
 
     @classmethod
+    def list_helper_features(cls):
+        prefix = cls._feature_prefix
+
+        def is_helper(name, method):
+            return (getattr(method, 'is_helper', False)
+                    and name.startswith(prefix))
+
+        class_routines = getmembers(cls, predicate=isroutine)
+
+        return [n[len(prefix):] for n, m in class_routines if is_helper(n, m)]
+
+    @classmethod
+    def list_features(cls, *, exclude_fixed=True):
+        def include(name, method):
+            helper_features = [cls._get_feature_methodname(f)
+                               for f in cls.list_helper_features()]
+
+            return (getattr(method, 'is_feature', False)
+                    and name not in helper_features
+                    and name.startswith(cls._feature_prefix)
+                    and not (name in cls.fixed_featues and exclude_fixed))
+
+        class_routines = getmembers(cls, predicate=isroutine)
+
+        return [n[len(cls._feature_prefix):]
+                for n, m in class_routines if include(n, m)]
+
+    @classmethod
     def get_schema(cls, features=()):
         def get_type(feature):
             method_name = cls._get_feature_methodname(feature)
@@ -73,31 +101,6 @@ class ExtractTask(ABC):
         features_types['error'] = pa.string()
 
         return pa.schema(features_types)
-
-    @classmethod
-    def list_helper_features(cls):
-        prefix = cls._feature_prefix
-
-        def is_helper(name, method):
-            return (getattr(method, 'is_helper', False)
-                    and name.startswith(prefix))
-
-        class_routines = getmembers(cls, predicate=isroutine)
-
-        return [n[len(prefix):] for n, m in class_routines if is_helper(n, m)]
-
-    @classmethod
-    def list_features(cls, *, exclude_fixed=True):
-        def is_feature(name, method):
-            return (getattr(method, 'is_feature', False)
-                    and name not in cls.list_helper_features()
-                    and not (name in cls.fixed_featues and exclude_fixed)
-                    and name.startswith(cls._feature_prefix))
-
-        class_routines = getmembers(cls, predicate=isroutine)
-
-        return [n[len(cls._feature_prefix):]
-                for n, m in class_routines if is_feature(n, m)]
 
     def load_bin(self, enforce=False):
         '''
