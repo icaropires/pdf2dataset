@@ -3,7 +3,17 @@ from pathlib import Path
 
 from .extraction import Extraction
 from .extraction_memory import ExtractionFromMemory
-from .pdf_extract_task import PdfExtractTask
+from .pdf_extract_task import PdfExtractTask, Image
+
+
+def image_from_bytes(image_bytes):
+    image = Image.from_bytes(image_bytes)
+    return image.pil_image
+
+
+def image_to_bytes(pil_image):
+    image = Image(pil_image)
+    return image.to_bytes()
 
 
 def _df_to_list(df, extraction):
