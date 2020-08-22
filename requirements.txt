@@ -1,11 +1,11 @@
 dask[dataframe]==2.23.0
-more-itertools==8.4.0
+more-itertools>=8.4.0
 opencv-python==4.4.0.42
-packaging==20.4
-pandas = "0.25.3"
+packaging>=20.4
+pandas>=0.25.0
 pdf2image==1.13.1
 pdftotext==2.1.5
 pyarrow==1.0.0
 pytesseract==0.3.5
 ray==0.8.7
-tqdm==4.48.2
+tqdm>=4.41.0

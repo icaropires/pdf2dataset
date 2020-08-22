@@ -16,7 +16,7 @@ from tqdm import tqdm
 from pathlib import Path
 import pdftotext
 
-from .extraction_task import ExtractionTask
+from .pdf_extract_task import PdfExtractTask
 
 
 # TODO: Eventually, I'll reduce this file size!!
@@ -32,7 +32,7 @@ class Extraction:
     def __init__(
         self, input_dir, results_file='', *, tmp_dir='',
         small=False, check_inputdir=True, chunksize=None, chunk_df_size=10000,
-        max_docs_memory=3000, task_class=ExtractionTask,
+        max_docs_memory=3000, task_class=PdfExtractTask, doc_pattern='*.pdf',
 
         ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
         image_format='jpeg', image_size=None,
@@ -44,13 +44,13 @@ class Extraction:
 
         if (check_inputdir and
                 (not (self.input_dir.exists() and self.input_dir.is_dir()))):
-            raise RuntimeError(f"Invalid input_dir: '{self.input_dir}',"
-                               " it must exists and be a directory")
+            raise ValueError(f"Invalid input_dir: '{self.input_dir}',"
+                             " it must exists and be a directory")
 
         if not small:
             if not results_file:
-                raise RuntimeError("If not using 'small' arg,"
-                                   " 'results_file' is mandatory")
+                raise ValueError("If not using 'small' arg,"
+                                 " 'results_file' is mandatory")
 
             if self.results_file.exists():
                 logging.warning(f'{results_file} already exists!'
@@ -65,63 +65,22 @@ class Extraction:
         self.small = small
         self.max_docs_memory = max_docs_memory
         self.chunk_df_size = chunk_df_size
+        self.doc_pattern = doc_pattern
 
         self.task_class = task_class
         self.task_params = {
-            'features': self._parse_featues(features),
+            'sel_features': features,
             'ocr': ocr,
             'ocr_lang': ocr_lang,
             'ocr_image_size': ocr_image_size,
             'image_format': image_format,
-            'image_size': self._parse_image_size(image_size),
+            'image_size': image_size,
         }
 
         self._df_lock = threading.Lock()
 
-    def _parse_featues(self, features):
-        possible_features = self.task_class.list_features()
-
-        if features == '':
-            features = []
-
-        elif features == 'all':
-            features = possible_features
-
-        elif isinstance(features, list):
-            ...
-
-        else:
-            features = features.split(',')
-
-        failed = (f not in possible_features for f in features)
-        if any(failed):
-            features = ','.join(features)
-            possible_features = ','.join(possible_features)
-
-            raise ValueError(
-                f"Invalid feature list: '{features}'"
-                f"\nPossible features are: '{possible_features}'"
-            )
-
-        return features
-
-    @staticmethod
-    def _parse_image_size(image_size_str):
-        if image_size_str is None:
-            return None
-
-        image_size_str = image_size_str.lower()
-
-        try:
-            width, height = map(int, image_size_str.split('x'))
-        except ValueError:
-            raise ValueError(f'Invalid image size parameter: {image_size_str}')
-
-        return width, height
-
-    @staticmethod
-    def get_docs(input_dir):
-        pdf_files = input_dir.rglob('*.pdf')
+    def get_docs(self, input_dir):
+        pdf_files = input_dir.rglob(self.doc_pattern)
 
         # Here feedback is better than keeping use of the generator
         return list(tqdm(pdf_files, desc='Looking for files', unit='docs'))
@@ -188,11 +147,19 @@ class Extraction:
 
     def _append_to_df(self, results):
         df = self._to_df(results)
-        df = dd.from_pandas(df, npartitions=1)
+        ddf = dd.from_pandas(df, npartitions=1)
+
+        exists = self.results_file.exists()
+        schema = self.task_class.get_schema(df.columns)
 
         with self._df_lock:
-            df.to_parquet(self.results_file, compression='gzip',
-                          append=self.results_file.exists(), engine='pyarrow')
+            # Dask has some optimizations over pure pyarrow,
+            #   like handling _metadata
+            ddf.to_parquet(
+                self.results_file, compression='gzip', ignore_divisions=True,
+                write_index=False,
+                schema=schema, append=exists, engine='pyarrow'
+            )
 
     @staticmethod
     def _get_pages_range(path, doc_bin=None):

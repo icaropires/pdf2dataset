@@ -1,7 +1,7 @@
 import argparse
 
 from . import Extraction
-from .extraction_task import ExtractionTask
+from .pdf_extract_task import PdfExtractTask
 
 
 # TODO: use click
@@ -21,7 +21,7 @@ def main():
         help='File to save the resultant dataframe'
     )
 
-    available_featues = ', '.join(ExtractionTask.list_features())
+    available_featues = ', '.join(PdfExtractTask.list_features())
     parser.add_argument(
         '--features',
         type=str,
@@ -98,7 +98,7 @@ def main():
         help='Ray address to connect'
     )
     parser.add_argument(
-        '--webui-host',
+        '--dashboard-host',
         type=str,
         default='*',
         help='Which IP ray webui will try to listen on'

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from .extraction import Extraction
-from .extraction_task import ExtractionTask
 
 
 class ExtractionFromMemory(Extraction):
@@ -16,7 +15,7 @@ class ExtractionFromMemory(Extraction):
         return self._gen_extrationtasks(tasks)  # Just to make more semantic
 
     def _gen_extrationtasks(self, tasks):
-        ''' Generate ExtractionTask from simplified tasks.
+        ''' Generate extraction task from simplified tasks form.
 
         Assumes is not a big volume, otherwise should save documents to
         a directory and use 'Extraction'. So, not going with
@@ -60,14 +59,14 @@ class ExtractionFromMemory(Extraction):
         new_tasks = []
         for doc, doc_bin, range_pages in tasks:
             new_tasks += [
-                ExtractionTask(doc, p, doc_bin, **self.task_params)
+                self.task_class(doc, p, doc_bin, **self.task_params)
                 for p in range_pages
             ]
 
         return new_tasks
 
     def apply(self):
-        # Simplified notation tasks to ExtractionTasks
+        # Coverts simplified notation tasks to extraction tasks
         tasks = self._gen_tasks(self.tasks)
 
         return self._process_tasks(tasks)

@@ -7,7 +7,7 @@ import pytest
 import pandas as pd
 from PIL import Image
 
-from pdf2dataset import Extraction, ExtractionTask, extract, extract_text
+from pdf2dataset import Extraction, PdfExtractTask, extract, extract_text
 
 from .testing_dataframe import check_and_compare
 
@@ -73,6 +73,16 @@ class TestExtractionCore:
             df['text'] = df['text'].str.strip()
 
         check_and_compare(df, expected_all, is_ocr=is_ocr)
+
+    def test_append_result(self, tmp_path, expected_all):
+        result_path = tmp_path / 'result.parquet.gzip'
+
+        extract(SAMPLES_DIR, result_path, chunk_df_size=1, features='all')
+
+        # Small 'chunk_df_size' to append to result multiple times
+        df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
+
+        check_and_compare(df, expected_all)
 
     # TODO: Reenable feature
     # def test_tmpdir(self, tmp_path, tmpdir):
@@ -196,7 +206,7 @@ class TestExtractionSmall:
 
 class TestParams:
     def test_no_text(self, expected_all):
-        available_features = ExtractionTask.list_features()
+        available_features = PdfExtractTask.list_features()
         features = list(set(available_features) - set(['text']))
 
         df = extract(SAMPLES_DIR, small=True, features=features)
@@ -205,7 +215,7 @@ class TestParams:
         check_and_compare(df, expected_all[columns])
 
     def test_no_image(self, expected_all):
-        available_features = ExtractionTask.list_features()
+        available_features = PdfExtractTask.list_features()
         features = list(set(available_features) - set(['image']))
 
         df = extract(SAMPLES_DIR, small=True, features=features)
@@ -220,7 +230,7 @@ class TestParams:
     def test_none(self, expected_all):
         df = extract(SAMPLES_DIR, small=True, features='')
 
-        columns = list(ExtractionTask.fixed_featues) + ['error_bool']
+        columns = list(PdfExtractTask.fixed_featues) + ['error_bool']
         check_and_compare(df, expected_all[columns])
 
     @pytest.mark.parametrize('size', (
