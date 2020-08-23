@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pdf2dataset"
-version = "0.4.0-alpha.1"
+version = "0.4.0"
 readme = "README.md"
 description = "Easily convert a subdirectory with big volume of PDF documents into a dataset, supports extracting text and images"
 authors = ["Ícaro Pires <icaropsa@gmail.com>"]
@@ -17,7 +17,7 @@ more-itertools = "^8.4.0"
 opencv-python = "4.4.0.42"
 packaging = "^20.4"
 pandas = "^0.25.0"
-pdf2image = "1.13.1"
+pdf2image = "^1.13.1"
 pdftotext = "2.1.5"
 pyarrow = "1.0.0"
 pytesseract = "0.3.5"
