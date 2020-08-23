@@ -13,8 +13,9 @@ from more_itertools import ichunked
 import pandas as pd
 import dask.dataframe as dd
 import ray
-from tqdm import tqdm
 import pdftotext
+from tqdm import tqdm
+from pytesseract import get_tesseract_version
 
 from .pdf_extract_task import PdfExtractTask
 
@@ -55,6 +56,10 @@ class Extraction:
             if self.results_file.exists():
                 logging.warning(f'{results_file} already exists!'
                                 ' Results will be appended to it!')
+
+        if ocr:
+            # Will raise exception if tesseract not found
+            get_tesseract_version()
 
         # Keep str and not Path, custom behaviour if is empty string
         self.tmp_dir = tmp_dir
@@ -161,8 +166,8 @@ class Extraction:
             # Dask has some optimizations over pure pyarrow,
             #   like handling _metadata
             ddf.to_parquet(
-                self.results_file, compression='gzip', ignore_divisions=True,
-                write_index=False,
+                self.results_file, compression='gzip',
+                ignore_divisions=True, write_index=False,
                 schema=schema, append=exists, engine='pyarrow'
             )
 

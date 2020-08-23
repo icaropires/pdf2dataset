@@ -85,8 +85,8 @@ class ExtractTask(ABC):
 
     @classmethod
     def get_schema(cls, features=()):
-        def get_type(feature):
-            method_name = cls._get_feature_methodname(feature)
+        def get_type(feature_name):
+            method_name = cls._get_feature_methodname(feature_name)
             method = getattr(cls, method_name)
 
             if method.is_helper:
@@ -94,11 +94,13 @@ class ExtractTask(ABC):
 
             return method.pyarrow_type
 
-        features_types = ((f, get_type(f))
-                          for f in cls.list_features() if f in features)
+        class_features = cls.list_features()
+        names = (name for name in features if name in class_features)
 
-        features_types = {f: t for f, t in features_types if t is not None}
-        features_types['error'] = pa.string()
+        features_types = ((name, get_type(name)) for name in names)
+
+        features_types = [(f, t) for f, t in features_types if t is not None]
+        features_types.append(('error', pa.string()))
 
         return pa.schema(features_types)
 
@@ -118,6 +120,15 @@ class ExtractTask(ABC):
     def is_feature_selected(self, feature):
         return feature in self._features
 
+    def get_feature(self, name):
+        extract_method_name = self._get_feature_methodname(name)
+        extract_method = getattr(self, extract_method_name)
+
+        if self._features[name] is None and self._errors[name] is None:
+            self._features[name], self._errors[name] = extract_method()
+
+        return self._features[name], self._errors[name]
+
     def process(self):
         if not self.file_bin:
             raise RuntimeError(
@@ -125,7 +136,7 @@ class ExtractTask(ABC):
             )
 
         for feature in self._features:
-            self._features[feature], _ = self._get_feature(feature)
+            self._features[feature], _ = self.get_feature(feature)
 
         self._pop_helper_features()
         self._check_result_fixedfeatures()
@@ -167,8 +178,8 @@ class ExtractTask(ABC):
         return sel_features
 
     @classmethod
-    def _get_feature_methodname(cls, feature):
-        method_name = cls._feature_prefix + feature
+    def _get_feature_methodname(cls, feature_name):
+        method_name = cls._feature_prefix + feature_name
 
         if not hasattr(cls, method_name):
             raise RuntimeError(f"Method '{method_name}' not found!")
@@ -178,15 +189,6 @@ class ExtractTask(ABC):
     def _pop_helper_features(self):
         for helper in self.list_helper_features():
             self._features.pop(helper)
-
-    def _get_feature(self, feature):
-        extract_method_name = self._get_feature_methodname(feature)
-        extract_method = getattr(self, extract_method_name)
-
-        if self._features[feature] is None and self._errors[feature] is None:
-            self._features[feature], self._errors[feature] = extract_method()
-
-        return self._features[feature], self._errors[feature]
 
     def _check_result_fixedfeatures(self):
         for fixed in self.fixed_featues:

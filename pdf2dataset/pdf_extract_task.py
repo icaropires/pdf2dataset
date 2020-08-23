@@ -78,6 +78,9 @@ class Image:
 
 class PdfExtractTask(ExtractTask):
 
+    class OcrError(Exception):
+        ...
+
     fixed_featues = ('path', 'page')
 
     def __init__(self, path, page, *args,
@@ -94,10 +97,10 @@ class PdfExtractTask(ExtractTask):
         super().__init__(path, *args, **kwargs)
 
     def _extract_text_ocr(self):
-        image_bytes, _ = self._get_feature('image_original')
+        image_bytes, _ = self.get_feature('image_original')
 
         if not image_bytes:
-            return None
+            raise self.OcrError("Wasn't possible to get page image!")
 
         image = Image.from_bytes(image_bytes)
         preprocessed = image.preprocess()
@@ -134,7 +137,7 @@ class PdfExtractTask(ExtractTask):
 
     @feature('binary')
     def get_image(self):
-        image_bytes, _ = self._get_feature('image_original')
+        image_bytes, _ = self.get_feature('image_original')
 
         if not image_bytes:
             return None
@@ -146,7 +149,7 @@ class PdfExtractTask(ExtractTask):
 
         return image_bytes
 
-    @feature('string', exceptions=[pdftotext.Error])
+    @feature('string', exceptions=[pdftotext.Error, OcrError])
     def get_text(self):
         if self.ocr:
             return self._extract_text_ocr()
