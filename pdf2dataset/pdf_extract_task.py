@@ -28,7 +28,7 @@ class Image:
         return type(self)(pil_image, self.image_format)
 
     def preprocess(self):
-        image = np.array(self.pil_image.convert('L'))
+        image = np.asarray(self.pil_image.convert('L'))
         image = cv2.adaptiveThreshold(
             image, 255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -68,9 +68,12 @@ class Image:
 
     def to_bytes(self):
         image_stream = io.BytesIO()
-        self.pil_image.save(image_stream, self.image_format)
 
-        return image_stream.getvalue()
+        with io.BytesIO() as image_stream:
+            self.pil_image.save(image_stream, self.image_format)
+            image_bytes = image_stream.getvalue()
+
+        return image_bytes
 
 
 class PdfExtractTask(ExtractTask):

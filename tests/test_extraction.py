@@ -5,14 +5,23 @@ from hashlib import md5
 
 import pytest
 import pandas as pd
+import numpy as np
 from PIL import Image
 
-from pdf2dataset import Extraction, PdfExtractTask, extract, extract_text
+from pdf2dataset import (
+    Extraction,
+    PdfExtractTask,
+    extract,
+    extract_text,
+    image_to_bytes,
+    image_from_bytes,
+)
 
 from .testing_dataframe import check_and_compare
 
 
 SAMPLES_DIR = 'tests/samples'
+TEST_IMAGE = Path(SAMPLES_DIR) / 'single_page1_1.jpeg'
 PARQUET_ENGINE = 'pyarrow'
 
 
@@ -53,6 +62,19 @@ def expected_all():
     df['image'] = df.apply(lambda row: read_image(row.path, row.page), axis=1)
 
     return df
+
+
+@pytest.fixture
+def image():
+    return Image.open(TEST_IMAGE)
+
+
+@pytest.fixture
+def image_bytes():
+    with open(TEST_IMAGE, 'rb') as f:
+        bytes_ = f.read()
+
+    return bytes_
 
 
 class TestExtractionCore:
@@ -286,6 +308,16 @@ class TestParams:
             assert serie.text.strip() != expected_serie.text.strip()
         else:
             assert serie.text.strip() == expected_serie.text.strip()
+
+    def test_imagefrombytes(self, image, image_bytes):
+
+        assert image_from_bytes(image_bytes) == image
+
+    def test_imagetobytes(self, image, image_bytes):
+        # png because jpeg change pixel values
+        calculated = image_from_bytes(image_to_bytes(image, 'png'))
+
+        assert (np.array(calculated) == np.array(image)).all()
 
 
 class TestExtractionFromMemory:

@@ -11,8 +11,8 @@ def image_from_bytes(image_bytes):
     return image.pil_image
 
 
-def image_to_bytes(pil_image):
-    image = Image(pil_image)
+def image_to_bytes(pil_image, image_format='jpeg'):
+    image = Image(pil_image, image_format)
     return image.to_bytes()
 
 

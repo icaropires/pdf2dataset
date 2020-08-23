@@ -87,6 +87,11 @@ class Extraction:
 
     def _get_output_path(self, doc_path):
         relative = doc_path.relative_to(self.input_dir)
+        try:
+            relative = doc_path.relative_to(self.input_dir)
+        except ValueError:
+            relative = doc_path
+
         out_path = Path(self.tmp_dir) / relative
 
         if self.tmp_dir:
