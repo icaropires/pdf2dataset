@@ -1,5 +1,3 @@
-#!/bin/env python3
-
 import io
 import itertools as it
 import logging
@@ -25,6 +23,25 @@ from .pdf_extract_task import PdfExtractTask
 # TODO: Add typing?
 # TODO: Set up a logger to the class
 # TODO: Substitute most (all?) prints for logs
+
+
+def get_pages_range(path, doc_bin=None):
+    # Using pdftotext to get num_pages because it's the best way I know
+    # pdftotext extracts lazy, so this won't process the text
+
+    try:
+        if not doc_bin:
+            with path.open('rb') as f:
+                num_pages = len(pdftotext.PDF(f))
+        else:
+            with io.BytesIO(doc_bin) as f:
+                num_pages = len(pdftotext.PDF(f))
+
+        pages = range(1, num_pages+1)
+    except pdftotext.Error:
+        pages = [-1]
+
+    return pages
 
 
 class Extraction:
@@ -171,25 +188,6 @@ class Extraction:
                 schema=schema, append=exists, engine='pyarrow'
             )
 
-    @staticmethod
-    def _get_pages_range(path, doc_bin=None):
-        # Using pdftotext to get num_pages because it's the best way I know
-        # pdftotext extracts lazy, so this won't process the text
-
-        try:
-            if not doc_bin:
-                with path.open('rb') as f:
-                    num_pages = len(pdftotext.PDF(f))
-            else:
-                with io.BytesIO(doc_bin) as f:
-                    num_pages = len(pdftotext.PDF(f))
-
-            pages = range(1, num_pages+1)
-        except pdftotext.Error:
-            pages = [-1]
-
-        return pages
-
     def _gen_tasks(self, docs):
         '''
         Returns tasks to be processed.
@@ -203,17 +201,16 @@ class Extraction:
                 tqdm(desc='Counting pages', unit='pages') as pbar:
 
             results = pool.imap(
-                self._get_pages_range, docs, chunksize=chunksize
+                get_pages_range, docs, chunksize=chunksize
             )
 
             for path, range_pages in zip(docs, results):
-
                 new_tasks = [
                     self.task_class(path, p, **self.task_params)
                     for p in range_pages
                 ]
                 tasks += new_tasks
-                pbar.update(len(new_tasks))
+                pbar.update(len(range_pages))
 
         return tasks
 

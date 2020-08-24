@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .extraction import Extraction
+from .extraction import Extraction, get_pages_range
 
 
 class ExtractionFromMemory(Extraction):
@@ -41,7 +41,7 @@ class ExtractionFromMemory(Extraction):
                     f"Document '{doc}' name must ends with '.pdf'"
                 )
 
-            range_pages = self._get_pages_range(doc, doc_bin=doc_bin)
+            range_pages = get_pages_range(doc, doc_bin=doc_bin)
 
             # -1 specifically because of the flag used by _get_pages_range
             if page in range_pages and not page == -1:
