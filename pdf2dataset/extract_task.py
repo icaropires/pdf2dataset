@@ -45,6 +45,9 @@ class ExtractTask(ABC):
     fixed_featues = ('path')
     _feature_prefix = 'get_'  # Optional
 
+    _helper_list = None
+    _features_list = None
+
     def __init__(self, path, file_bin=None, sel_features='all'):
         self.path = path
         self.file_bin = file_bin
@@ -57,6 +60,9 @@ class ExtractTask(ABC):
 
     @classmethod
     def list_helper_features(cls):
+        if cls._helper_list is not None:
+            return cls._helper_list
+
         prefix = cls._feature_prefix
 
         def is_helper(name, method):
@@ -65,10 +71,16 @@ class ExtractTask(ABC):
 
         class_routines = getmembers(cls, predicate=isroutine)
 
-        return [n[len(prefix):] for n, m in class_routines if is_helper(n, m)]
+        cls._helper_list = [n[len(prefix):]
+                            for n, m in class_routines if is_helper(n, m)]
+
+        return cls._helper_list
 
     @classmethod
     def list_features(cls, *, exclude_fixed=True):
+        if cls._features_list is not None:
+            return cls._features_list
+
         def include(name, method):
             helper_features = [cls._get_feature_methodname(f)
                                for f in cls.list_helper_features()]
@@ -80,8 +92,10 @@ class ExtractTask(ABC):
 
         class_routines = getmembers(cls, predicate=isroutine)
 
-        return [n[len(cls._feature_prefix):]
-                for n, m in class_routines if include(n, m)]
+        cls._features_list = [n[len(cls._feature_prefix):]
+                              for n, m in class_routines if include(n, m)]
+
+        return cls._features_list
 
     @classmethod
     def get_schema(cls, features=()):
