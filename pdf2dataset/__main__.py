@@ -15,7 +15,7 @@ def main():
         help='The folder to lookup for PDF files recursively'
     )
     parser.add_argument(
-        'results_file',
+        'out_file',
         type=str,
         default='df.parquet.gzip',
         help='File to save the resultant dataframe'
@@ -34,13 +34,6 @@ def main():
         )
     )
 
-    parser.add_argument(
-        '--tmp-dir',
-        type=str,
-        default='',
-        help=('The folder to keep all the results, including log files and'
-              ' intermediate files')
-    )
     parser.add_argument(
         '--ocr-lang',
         type=str,
@@ -115,7 +108,7 @@ def main():
     extraction = Extraction(**vars(args))
     extraction.apply()
 
-    print(f"Results saved to '{extraction.results_file}'!")
+    print(f"Results saved to '{extraction.out_file}'!")
 
 
 if __name__ == '__main__':

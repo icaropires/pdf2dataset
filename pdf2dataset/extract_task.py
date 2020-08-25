@@ -45,8 +45,9 @@ class ExtractTask(ABC):
     fixed_featues = ('path')
     _feature_prefix = 'get_'  # Optional
 
+    # Memoization
     _helper_list = None
-    _features_list = None
+    _features_list = {}
 
     def __init__(self, path, file_bin=None, sel_features='all'):
         self.path = path
@@ -61,7 +62,7 @@ class ExtractTask(ABC):
     @classmethod
     def list_helper_features(cls):
         if cls._helper_list is not None:
-            return cls._helper_list
+            return cls._helper_list.copy()
 
         prefix = cls._feature_prefix
 
@@ -77,25 +78,32 @@ class ExtractTask(ABC):
         return cls._helper_list
 
     @classmethod
-    def list_features(cls, *, exclude_fixed=True):
-        if cls._features_list is not None:
-            return cls._features_list
+    def list_features(cls, *, exclude_fixed=False):
+        is_calculated = cls._features_list.get(exclude_fixed)
+
+        if is_calculated:
+            return cls._features_list[exclude_fixed].copy()
 
         def include(name, method):
-            helper_features = [cls._get_feature_methodname(f)
-                               for f in cls.list_helper_features()]
+            helper = [cls._get_feature_methodname(f)
+                      for f in cls.list_helper_features()]
 
-            return (getattr(method, 'is_feature', False)
-                    and name not in helper_features
+            is_feature = getattr(method, 'is_feature', False)
+
+            feature = name[len(cls._feature_prefix):]
+
+            return (is_feature
+                    and name not in helper
                     and name.startswith(cls._feature_prefix)
-                    and not (name in cls.fixed_featues and exclude_fixed))
+                    and not (feature in cls.fixed_featues and exclude_fixed))
 
         class_routines = getmembers(cls, predicate=isroutine)
 
-        cls._features_list = [n[len(cls._feature_prefix):]
-                              for n, m in class_routines if include(n, m)]
+        features_list = [n[len(cls._feature_prefix):]
+                         for n, m in class_routines if include(n, m)]
 
-        return cls._features_list
+        cls._features_list[exclude_fixed] = features_list
+        return features_list
 
     @classmethod
     def get_schema(cls, features=()):
@@ -126,6 +134,9 @@ class ExtractTask(ABC):
             raise RuntimeError(f"Method '{method_name}' not found!")
 
         return method_name
+
+    def list_instance_features(self):
+        return list(chain(self.fixed_featues, self.sel_features, ['error']))
 
     def load_bin(self, enforce=False):
         '''

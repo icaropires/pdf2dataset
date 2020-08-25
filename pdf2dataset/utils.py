@@ -67,7 +67,7 @@ def gen_helpers(task_class=PdfExtractTask):
 
         return method_name
 
-    features = task_class.list_features(exclude_fixed=False)
+    features = task_class.list_features()
     return [gen_helper(feature) for feature in features]
 
 

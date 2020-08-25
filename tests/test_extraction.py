@@ -1,5 +1,4 @@
 from io import BytesIO
-import re
 from pathlib import Path
 from hashlib import md5
 
@@ -9,7 +8,6 @@ import numpy as np
 from PIL import Image
 
 from pdf2dataset import (
-    Extraction,
     PdfExtractTask,
     extract,
     extract_text,
@@ -137,30 +135,6 @@ class TestExtractionCore:
 
     #     assert sorted(tmp_files) == sorted(expected_files)
 
-    @pytest.mark.parametrize('path,expected', (
-        ('multi_page1_text_1.txt',
-            {'path': 'multi_page1', 'page': '1', 'feature': 'text'}),
-        ('multi_page1_text_2.txt',
-            {'path': 'multi_page1', 'page': '2', 'feature': 'text'}),
-        ('multi_page1_text_3.txt',
-            {'path': 'multi_page1', 'page': '3', 'feature': 'text'}),
-        ('multi_page1_text_10.txt',
-            {'path': 'multi_page1', 'page': '10', 'feature': 'text'}),
-        ('multi_page1_path_101.txt',
-            {'path': 'multi_page1', 'page': '101', 'feature': 'path'}),
-        ('s1/s2/doc_image_1000.txt',
-            {'path': 's1/s2/doc', 'page': '1000', 'feature': 'image'}),
-        ('single_page1_my-feature_1.txt',
-            {'path': 'single_page1', 'page': '1', 'feature': 'my-feature'}),
-        ('invalid1_error_-10.txt',
-            {'path': 'invalid1', 'page': '-10', 'feature': 'error'}),
-        ('invalid1_error_10.txt',
-            {'path': 'invalid1', 'page': '10', 'feature': 'error'}),
-    ))
-    def test_path_pattern(self, path, expected):
-        result = re.match(Extraction._path_pat, path)
-        assert result.groupdict() == expected
-
 
 class TestExtractionSmall:
     @pytest.mark.parametrize('is_ocr', (
@@ -227,29 +201,26 @@ class TestExtractionSmall:
 
 
 class TestParams:
-    def test_no_text(self, expected_all):
-        available_features = PdfExtractTask.list_features()
-        features = list(set(available_features) - set(['text']))
-
-        df = extract(SAMPLES_DIR, small=True, features=features)
-
-        columns = [c for c in expected_all.columns if c != 'text']
-        check_and_compare(df, expected_all[columns])
-
-    def test_no_image(self, expected_all):
-        available_features = PdfExtractTask.list_features()
-        features = list(set(available_features) - set(['image']))
-
-        df = extract(SAMPLES_DIR, small=True, features=features)
-
-        columns = [c for c in expected_all.columns if c != 'image']
-        check_and_compare(df, expected_all[columns])
-
     def test_features_as_list(self, expected_all):
         df = extract(SAMPLES_DIR, small=True, features=['text', 'image'])
         check_and_compare(df, expected_all)
 
-    def test_none(self, expected_all):
+    @pytest.mark.parametrize('excluded', [
+        'text',
+        'image',
+    ])
+    def test_exclude_feature(self, excluded, expected_all):
+        features = PdfExtractTask.list_features()
+        features.remove(excluded)
+
+        df = extract(SAMPLES_DIR, small=True, features=features)
+
+        columns = list(expected_all.columns)
+        columns.remove(excluded)
+
+        check_and_compare(df, expected_all[columns])
+
+    def test_empty_feature(self, expected_all):
         df = extract(SAMPLES_DIR, small=True, features='')
 
         columns = list(PdfExtractTask.fixed_featues) + ['error_bool']
