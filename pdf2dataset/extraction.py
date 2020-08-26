@@ -2,12 +2,10 @@ import io
 import itertools as it
 import logging
 import os
-import threading
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Pool
+from multiprocessing import Pool, Process, Queue
 from pathlib import Path
 from more_itertools import ichunked
-from queue import Queue
 
 import ray
 import pdftotext
@@ -177,31 +175,40 @@ class Extraction:
 
         return Extraction._process_chunk_ray.remote(chunk)
 
-    def _ray_process(self, tasks, progress_bar):
+    def _ray_process_aux(self, tasks, results_queue):
         chunks = ichunked(tasks, int(self.chunksize))
         num_initial = int(ray.available_resources()['CPU'])
 
         futures = [self._submit_chunk_ray(c)
                    for c in it.islice(chunks, num_initial)]
 
-        while futures:
-            (finished, *_), rest = ray.wait(futures, num_returns=1)
+        with self._get_processing_bar(len(tasks)) as progress_bar:
+            while futures:
+                (finished, *_), rest = ray.wait(futures, num_returns=1)
 
-            result = ray.get(finished)
-            self.results_queue.put(result)
+                result = ray.get(finished)
+                results_queue.put(result)
 
-            progress_bar.update(len(result))
+                progress_bar.update(len(result))
 
-            try:
-                chunk = next(chunks)
-            except StopIteration:
-                ...
-            else:
-                rest.append(self._submit_chunk_ray(chunk))
+                try:
+                    chunk = next(chunks)
+                except StopIteration:
+                    ...
+                else:
+                    rest.append(self._submit_chunk_ray(chunk))
 
-            futures = rest
+                futures = rest
 
-        self.results_queue.put(None)
+        results_queue.put(None)
+
+    def _ray_process(self, *args, **kwargs):
+        ray.init(**self.ray_params)
+
+        try:
+            self._ray_process_aux(*args, **kwargs)
+        finally:
+            ray.shutdown()
 
     def _apply_to_big(self, tasks, num_tasks):
         'Apply the extraction to a big volume of data'
@@ -216,26 +223,25 @@ class Extraction:
         processed, not_processed = tasks
 
         # processing_tasks = it.chain(processed, not_processed)
-        with self._get_processing_bar(len(not_processed)) as progress:
 
-            threading.Thread(
-                target=self._ray_process,
-                args=(not_processed, progress)
-            ).start()
+        Process(
+            target=self._ray_process,
+            args=(not_processed, self.results_queue)
+        ).start()
 
-            while True:
-                result_chunk = self.results_queue.get()
+        while True:
+            result_chunk = self.results_queue.get()
 
-                if isinstance(result_chunk, Exception):
-                    raise result_chunk
+            if isinstance(result_chunk, Exception):
+                raise result_chunk
 
-                if result_chunk is None:
-                    break
+            if result_chunk is None:
+                break
 
-                self.results.append(result_chunk)
+            self.results.append(result_chunk)
 
-            if len(self.results):
-                self.results.write_and_clear()
+        if len(self.results):
+            self.results.write_and_clear()
 
     @staticmethod
     def _process_task(task):
@@ -290,11 +296,7 @@ class Extraction:
         if self.small:
             return self._apply_to_small(tasks, num_tasks)
 
-        try:
-            ray.init(**self.ray_params)
-            self._apply_to_big(tasks, num_tasks)
-        finally:
-            ray.shutdown()
+        self._apply_to_big(tasks, num_tasks)
 
         return self.out_file
 
