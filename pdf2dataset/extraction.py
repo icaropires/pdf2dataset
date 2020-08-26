@@ -23,32 +23,13 @@ from .results import Results
 # TODO: Substitute most (all?) prints for logs
 
 
-def get_pages_range(path, doc_bin=None):
-    # Using pdftotext to get num_pages because it's the best way I know
-    # pdftotext extracts lazy, so this won't process the text
-
-    try:
-        if not doc_bin:
-            with path.open('rb') as f:
-                num_pages = len(pdftotext.PDF(f))
-        else:
-            with io.BytesIO(doc_bin) as f:
-                num_pages = len(pdftotext.PDF(f))
-
-        pages = range(1, num_pages+1)
-    except pdftotext.Error:
-        pages = [-1]
-
-    return pages
-
-
 class Extraction:
 
     def __init__(
-        self, input_dir, out_file='', *,
-        small=False, check_inputdir=True, chunksize=None, chunk_df_size=10000,
-        max_files_memory=3000, task_class=PdfExtractTask,
-        files_pattern='*.pdf', files_list=None,
+        self, input_dir=None, out_file=None, *,
+        files_list=None, task_class=PdfExtractTask,
+        small=False, check_input=True, chunksize=None, chunk_df_size=10000,
+        max_files_memory=3000, files_pattern='*.pdf',
 
         # TODO: task params
         ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
@@ -56,22 +37,16 @@ class Extraction:
 
         **ray_params
     ):
-        self.input_dir = Path(input_dir).resolve()
-        self.out_file = Path(out_file).resolve()
+        self.input_dir = Path(input_dir).resolve() if input_dir else None
+        self.files_list = files_list
 
-        if (check_inputdir and
-                (not (self.input_dir.exists() and self.input_dir.is_dir()))):
-            raise ValueError(f"Invalid input_dir: '{self.input_dir}',"
-                             " it must exists and be a directory")
+        self.out_file = Path(out_file).resolve() if out_file else None
+
+        if check_input:
+            self._check_input()
 
         if not small:
-            if not out_file:
-                raise ValueError("If not using 'small' arg,"
-                                 " 'out_file' is mandatory")
-
-            if self.out_file.exists():
-                logging.warning(f'{out_file} already exists!'
-                                ' Results will be appended to it!')
+            self._check_outfile()
 
         if ocr:
             # Will raise exception if tesseract was not found
@@ -83,7 +58,6 @@ class Extraction:
         self.small = small
         self.max_files_memory = max_files_memory
         self.files_pattern = files_pattern
-        self.files_list = files_list
 
         self.task_class = task_class
         self.task_params = {
@@ -105,6 +79,35 @@ class Extraction:
 
         self.results_queue = Queue(max_files_memory)
 
+    def _check_input(self):
+        if not any([self.input_dir, self.files_list]):
+            raise RuntimeError(
+                "Any of 'input_dir' or 'self.files_list' must be provided"
+            )
+
+        if not self.files_list:
+            self._check_inputdir()
+
+    def _check_inputdir(self):
+        if (not self.input_dir
+                or not (self.input_dir.exists() and self.input_dir.is_dir())):
+
+            raise ValueError(f"Invalid input_dir: '{self.input_dir}',"
+                             " it must exists and be a directory")
+
+    def _check_outfile(self):
+        if not self.out_file:
+            raise RuntimeError("If not using 'small' arg,"
+                               " 'out_file' is mandatory")
+
+    @property
+    def files(self):
+        if self.files_list:
+            return self.files_list
+
+        self.files_list = self.list_files()
+        return self.files_list
+
     def list_columns(self):
         aux_task = self.task_class(1, 1, **self.task_params)
 
@@ -117,29 +120,29 @@ class Extraction:
 
         return columns
 
-    def list_files(self, input_dir):
-        pdf_files = input_dir.rglob(self.files_pattern)
+    def list_files(self):
+        pdf_files = self.input_dir.rglob(self.files_pattern)
 
         # Here feedback is better than keeping use of the generator
         return list(tqdm(pdf_files, desc='Looking for files', unit='files'))
 
-    def _gen_tasks(self, files):
+    def gen_tasks(self):
         '''
         Returns tasks to be processed.
-        For faulty documents, only the page -1 will be available
+        For faulty files, only the page -1 will be available
         '''
         # 10 because this is a fast operation
-        chunksize = int(max(1, (len(files)/self.num_cpus)//10))
+        chunksize = int(max(1, (len(self.files)/self.num_cpus)//10))
 
         tasks = []
         with Pool(self.num_cpus) as pool, \
                 tqdm(desc='Counting pages', unit='pages') as pbar:
 
             results = pool.imap(
-                get_pages_range, files, chunksize=chunksize
+                self.get_pages_range, self.files, chunksize=chunksize
             )
 
-            for path, range_pages in zip(files, results):
+            for path, range_pages in zip(self.files, results):
                 new_tasks = [
                     self.task_class(path, p, **self.task_params)
                     for p in range_pages
@@ -150,6 +153,25 @@ class Extraction:
         return tasks
 
     @staticmethod
+    def get_pages_range(file_path, file_bin=None):
+        # Using pdftotext to get num_pages because it's the best way I know
+        # pdftotext extracts lazy, so this won't process the text
+
+        try:
+            if not file_bin:
+                with file_path.open('rb') as f:
+                    num_pages = len(pdftotext.PDF(f))
+            else:
+                with io.BytesIO(file_bin) as f:
+                    num_pages = len(pdftotext.PDF(f))
+
+            pages = range(1, num_pages+1)
+        except pdftotext.Error:
+            pages = [-1]
+
+        return pages
+
+    @staticmethod
     def _get_processing_bar(num_tasks, iterable=None):
         return tqdm(
             iterable, total=num_tasks,
@@ -157,7 +179,7 @@ class Extraction:
         )
 
     @staticmethod
-    def _load_task_bin(task):
+    def copy_and_load_task(task):
         task = task.copy()  # Copy to have control over memory references
         task.load_bin()
 
@@ -171,7 +193,7 @@ class Extraction:
     @staticmethod
     def _submit_chunk_ray(chunk):
         with ThreadPoolExecutor() as executor:
-            chunk = list(executor.map(Extraction._load_task_bin, chunk))
+            chunk = list(executor.map(Extraction.copy_and_load_task, chunk))
 
         return Extraction._process_chunk_ray.remote(chunk)
 
@@ -210,7 +232,7 @@ class Extraction:
         finally:
             ray.shutdown()
 
-    def _apply_to_big(self, tasks, num_tasks):
+    def _apply_to_big(self, tasks):
         'Apply the extraction to a big volume of data'
 
         print('\n=== SUMMARY ===',
@@ -220,13 +242,9 @@ class Extraction:
               f'Chunksize: {self.chunksize}',
               sep='\n', end='\n\n')
 
-        processed, not_processed = tasks
-
-        # processing_tasks = it.chain(processed, not_processed)
-
         Process(
             target=self._ray_process,
-            args=(not_processed, self.results_queue)
+            args=(tasks, self.results_queue)
         ).start()
 
         while True:
@@ -240,14 +258,14 @@ class Extraction:
 
             self.results.append(result_chunk)
 
-        if len(self.results):
+        if self.results:
             self.results.write_and_clear()
 
     @staticmethod
     def _process_task(task):
         return task.process()
 
-    def _apply_to_small(self, tasks, num_tasks):
+    def _apply_to_small(self, tasks):
         ''''Apply the extraction to a small volume of data
         More direct approach than 'big', but with these differences:
             - Not saving progress
@@ -256,56 +274,46 @@ class Extraction:
             - Returns the resultant dataframe
         '''
 
-        processed, not_processed = tasks
-        not_processed = (self._load_task_bin(t) for t in not_processed)
+        num_tasks = len(tasks)
+        tasks = (self.copy_and_load_task(t) for t in tasks)
 
         with Pool(self.num_cpus) as pool:
-            processing_tasks = pool.imap_unordered(
-                self._process_task, not_processed
-            )
+            processing_tasks = pool.imap_unordered(self._process_task, tasks)
+            results = self._get_processing_bar(num_tasks, processing_tasks)
 
-            processing_tasks = it.chain(processed, processing_tasks)
-
-            processing_tasks = self._get_processing_bar(
-                num_tasks, processing_tasks
-            )
-
-            self.results.append(list(processing_tasks))
+            self.results.append(results)
 
         return self.results.get()
 
+    def filter_processed_tasks(self, tasks):
+        is_processed = self.results.is_tasks_processed(tasks)
+        tasks = [t for t, is_ in zip(tasks, is_processed) if not is_]
+
+        return tasks
+
     def _process_tasks(self, tasks):
-        processed, not_processed = self.results.get_processed_tasks(tasks)
-        # processed = self._load_procesed_tasks(processed)
+        num_total_tasks = len(tasks)
+        tasks = self.filter_processed_tasks(tasks)
+        num_skipped = num_total_tasks - len(tasks)
 
-        num_tasks = len(tasks)
-        tasks = (processed, not_processed)
-
-        if processed:
+        if num_skipped:
             logging.warning(
-                # TODO
-                f"Skipping {len(processed)} already"  # tmp_dir
-                # f" processed pages in directory '{self.tmp_dir}'"
+                "'%s' have already %d processed pages, skipping these...",
+                self.out_file, num_skipped
             )
 
         if self.chunksize is None:
-            chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
+            chunk_by_cpu = (len(tasks)/self.num_cpus) / 100
             max_chunksize = self.max_files_memory // self.num_cpus
             self.chunksize = int(max(1, min(chunk_by_cpu, max_chunksize)))
 
         if self.small:
-            return self._apply_to_small(tasks, num_tasks)
+            return self._apply_to_small(tasks)
 
-        self._apply_to_big(tasks, num_tasks)
+        self._apply_to_big(tasks)
 
         return self.out_file
 
     def apply(self):
-        if self.files_list is None:
-            files = self.list_files(self.input_dir)
-        else:
-            files = self.files_list
-
-        tasks = self._gen_tasks(files)
-
+        tasks = self.gen_tasks()
         return self._process_tasks(tasks)

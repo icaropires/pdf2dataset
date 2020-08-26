@@ -54,6 +54,12 @@ class TestingDataFrame:
         return (self_values == other_values).all()
 
     def assert_equal(self, expected):
+        if any([self._df.empty, expected._df.empty]):
+            if self._df.empty and expected._df.empty:
+                assert True
+
+            assert False
+
         self_cp = copy.deepcopy(self)
         expected_cp = copy.deepcopy(expected)
 

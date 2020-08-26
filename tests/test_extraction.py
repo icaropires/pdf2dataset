@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from pdf2dataset import (
+    ExtractionFromMemory,
     PdfExtractTask,
     extract,
     extract_text,
@@ -18,8 +19,8 @@ from pdf2dataset import (
 from .testing_dataframe import check_and_compare
 
 
-SAMPLES_DIR = 'tests/samples'
-TEST_IMAGE = Path(SAMPLES_DIR) / 'single_page1_1.jpeg'
+SAMPLES_DIR = Path('tests/samples')
+TEST_IMAGE = SAMPLES_DIR / 'single_page1_1.jpeg'
 PARQUET_ENGINE = 'pyarrow'
 
 
@@ -104,36 +105,57 @@ class TestExtractionCore:
 
         check_and_compare(df, expected_all)
 
-    # TODO: Reenable feature
-    # def test_tmpdir(self, tmp_path, tmpdir):
-    #     result_path = tmp_path / 'result.parquet.gzip'
-    #     tmp_dir = Path(tmpdir.mkdir('tmp'))
+    def test_passing_paths_list(self, tmp_path, expected_all):
+        result_path = tmp_path / 'result.parquet.gzip'
+        files_list = list(Path(SAMPLES_DIR).rglob('*.pdf'))
 
-    #     extract(SAMPLES_DIR, result_path, tmp_dir=tmp_dir)
+        df = extract(files_list, result_path, small=True)
 
-    #     features = ['text', 'error']
-    #     folders = ['sub1', 'sub2']
-    #     prefix_pages = (
-    #         ('multi_page1', [1, 2, 3]),
-    #         ('single_page1', [1]),
-    #         ('sub1/copy_multi_page1', [1, 2, 3]),
-    #         ('sub2/copy_single_page1', [1]),
-    #         ('invalid1', [-1]),
-    #     )
+        # Paths will be relative to pwd, so adapting expected_all
+        expected_all['path'] = expected_all['path'].apply(
+            lambda p: str(SAMPLES_DIR / p)
+        )
+        check_and_compare(df, expected_all)
 
-    #     expected_files = [
-    #             f'{prefix}_{feature}_{page}.txt'
-    #             for prefix, pages in prefix_pages
-    #             for page in pages
-    #             for feature in features
-    #     ]
+    def test_filter_processed(self, tmp_path):
+        with open(SAMPLES_DIR / 'single_page1.pdf', 'rb') as f:
+            single = f.read()
 
-    #     expected_files += folders
+        with open(SAMPLES_DIR / 'multi_page1.pdf', 'rb') as f:
+            multi = f.read()
 
-    #     tmp_files = list(tmp_dir.rglob('*'))
-    #     tmp_files = [str(f.relative_to(tmp_dir)) for f in tmp_files]
+        with open(SAMPLES_DIR / 'invalid1.pdf', 'rb') as f:
+            invalid = f.read()
 
-    #     assert sorted(tmp_files) == sorted(expected_files)
+        total_tasks = [
+            ('single1.pdf', single),
+            ('multi1.pdf', multi, 2),
+            ('hey/multi2.pdf', multi, 1),
+            ('multi1.pdf', multi, 1),
+            ('my_dir/single3.pdf', single),
+            ('/opt/invalid.pdf', invalid),
+            ('multi1.pdf', multi, 3),
+            ('single2.pdf', single),
+            ('/tmp/single3.pdf', single),
+            ('/tmp/invalid.pdf', invalid),
+        ]
+
+        result_path = tmp_path / 'result.parquet.gzip'
+
+        for counter, task in enumerate(total_tasks):
+
+            extraction = ExtractionFromMemory(
+                total_tasks,
+                out_file=result_path,
+                features='text'
+            )
+
+            tasks = extraction.gen_tasks()
+            tasks = extraction.filter_processed_tasks(tasks)
+
+            assert len(tasks) == len(total_tasks) - counter
+
+            extract([task], result_path, features='text')
 
 
 class TestExtractionSmall:
@@ -298,10 +320,10 @@ class TestExtractionFromMemory:
         False,
     ))
     def test_passing_tasks(self, tmp_path, small):
-        with open('tests/samples/single_page1.pdf', 'rb') as f:
+        with open(SAMPLES_DIR / 'single_page1.pdf', 'rb') as f:
             pdf1_bin = f.read()
 
-        with open('tests/samples/multi_page1.pdf', 'rb') as f:
+        with open(SAMPLES_DIR / 'multi_page1.pdf', 'rb') as f:
             pdf2_bin = f.read()
 
         tasks = [

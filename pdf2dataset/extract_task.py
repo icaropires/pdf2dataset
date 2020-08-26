@@ -89,13 +89,12 @@ class ExtractTask(ABC):
                       for f in cls.list_helper_features()]
 
             is_feature = getattr(method, 'is_feature', False)
-
-            feature = name[len(cls._feature_prefix):]
+            feat_name = name[len(cls._feature_prefix):]
 
             return (is_feature
                     and name not in helper
                     and name.startswith(cls._feature_prefix)
-                    and not (feature in cls.fixed_featues and exclude_fixed))
+                    and not (feat_name in cls.fixed_featues and exclude_fixed))
 
         class_routines = getmembers(cls, predicate=isroutine)
 

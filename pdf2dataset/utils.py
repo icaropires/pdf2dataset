@@ -1,5 +1,5 @@
 import sys
-from pathlib import Path
+import inspect
 
 from .extraction import Extraction
 from .extraction_memory import ExtractionFromMemory
@@ -32,18 +32,32 @@ def _df_to_list(df, extraction):
 
 
 def extract(*args, return_list=False, **kwargs):
-    def is_path(param):
-        return isinstance(param, (str, Path))
+    def is_tasks(input_):
+        return (
+            kwargs.get('tasks')
+            or (isinstance(input_, (list, tuple))
+                and input_ and isinstance(input_[0], (list, tuple)))
+        )
+
+    args = list(args)
+    input_ = args.pop(0) if args else None
 
     kwargs['small'] = True if return_list else kwargs.get('small', False)
 
-    if args and is_path(args[0]) or kwargs.get('input_dir'):
-        extraction = Extraction(*args, **kwargs)
-    else:
-        extraction = ExtractionFromMemory(*args, **kwargs)
+    if inspect.isgenerator(input_):
+        raise ValueError('Generator as input is not currently supported!')
 
-    # None if small=False
-    df = extraction.apply()
+    if is_tasks(input_):
+        tasks = kwargs.pop('tasks', input_)
+        extraction = ExtractionFromMemory(tasks, *args, **kwargs)
+    else:
+        if isinstance(input_, (list, tuple)):
+            kwargs['files_list'] = input_
+            input_ = ''
+
+        extraction = Extraction(input_, *args, **kwargs)
+
+    df = extraction.apply()  # df is None if small equals False
 
     if return_list:
         return _df_to_list(df, extraction)
