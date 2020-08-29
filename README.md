@@ -128,7 +128,7 @@ df = extract_text('my_pdfs_dir', small=True)
 
 Instead of specifying a directory, one can specify a list of files to be processed.
 
-###### Example:
+##### Example:
 
 ``` python
 from pdf2dataset import extract
@@ -206,7 +206,7 @@ With version >= 0.4.0, is also possible to easily implement extraction of custom
 
 ##### Example:
 
-This is the strucuture:
+This is the structure:
 
 ``` python
 from pdf2dataset import extract, feature, PdfExtractTask
@@ -264,7 +264,8 @@ ValueError: There was a problem!
 ```
 
 Notes:
-* `@feature` is the decorator used to define new features, additionally, the extraction method must start with the prefix `get_` (avoids collisions with attribute names and increases readability)
+* `@feature` is the decorator used to define new features.
+* The extraction method name must start with the prefix `get_` (avoids collisions with attribute names and increases readability)
 * First argument to `@feature` must be a valid PyArrow type, complete list [here](https://arrow.apache.org/docs/python/api/datatypes.html)
 * `exceptions` param specify a list of exceptions to be recorded on DataFrame, otherwise they are raised
 * For this example, all available features plus the custom ones are extracted
