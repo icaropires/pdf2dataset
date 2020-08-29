@@ -28,10 +28,12 @@ class Extraction:
     def __init__(
         self, input_dir=None, out_file=None, *,
         files_list=None, task_class=PdfExtractTask,
-        small=False, check_input=True, chunksize=None, chunk_df_size=10000,
-        max_files_memory=3000, files_pattern='*.pdf',
 
-        # TODO: task params
+        # Config params
+        small=False, check_input=True, chunksize=None,
+        saving_interval=5000, max_files_memory=3000, files_pattern='*.pdf',
+
+        # Task_params
         ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
         image_format='jpeg', image_size=None,
 
@@ -72,7 +74,7 @@ class Extraction:
         columns = self.list_columns()
         schema = self.task_class.get_schema(columns)
 
-        max_results_size = chunk_df_size if not small else None
+        max_results_size = saving_interval if not small else None
         self.results = Results(
             self.input_dir, self.out_file, schema, max_size=max_results_size
         )

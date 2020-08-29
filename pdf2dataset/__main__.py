@@ -35,6 +35,13 @@ def main():
     )
 
     parser.add_argument(
+        '--saving-interval',
+        type=int,
+        default=5000,
+        help=('Results will be persisted to results folder'
+              ' every saving interval of pages')
+    )
+    parser.add_argument(
         '--ocr-lang',
         type=str,
         default='por',

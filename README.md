@@ -2,6 +2,7 @@
 
 [![pdf2dataset](https://github.com/icaropires/pdf2dataset/workflows/pdf2dataset/badge.svg?branch=master)](https://github.com/icaropires/pdf2dataset)
 [![pypi](https://img.shields.io/pypi/v/pdf2dataset.svg)](https://pypi.python.org/pypi/pdf2dataset)
+[![Maintainability](https://api.codeclimate.com/v1/badges/cbe90c3043b038f52b18/maintainability)](https://codeclimate.com/github/icaropires/pdf2dataset/maintainability)
 [![codecov](https://codecov.io/gh/icaropires/pdf2dataset/branch/master/graph/badge.svg)](https://codecov.io/gh/icaropires/pdf2dataset)
 [![pypi-stats](https://img.shields.io/pypi/dm/pdf2dataset)](https://pypistats.org/packages/pdf2dataset)
 
@@ -13,14 +14,14 @@ No need to setup any external service (no database, brokers, etc). Just install 
 
 * Conversion of a whole subdirectory with PDFs documents into a pandas DataFrame
 * Support for parallel and distributed processing through [ray](https://github.com/ray-project/ray)
-* Extractions are performed by page, making tasks distribution more uniform, for handling documents with a big difference in number of pages
+* Extractions are performed by page, making tasks distribution more uniform for handling documents with big differences in number of pages
 * Incremental writing of resulting DataFrame, making possible to process data bigger than memory
 * Error tracking of faulty documents
-* Ability to save processing progress and resume from it
-* Ability to extract text through [pdftotext](https://github.com/jalan/pdftotext)
-* Ability to use OCR for extracting text through [pytesseract](https://github.com/madmaze/pytesseract)
-* Ability to extract images through [pdf2image](https://github.com/Belval/pdf2image)
-* Support for implementing custom features extraction
+* Resume interrupted processing
+* Extract text through [pdftotext](https://github.com/jalan/pdftotext)
+* Use OCR for extracting text through [pytesseract](https://github.com/madmaze/pytesseract)
+* Extract images through [pdf2image](https://github.com/Belval/pdf2image)
+* Support to implement custom features extraction
 * Highly customizable behavior through params
 
 
@@ -69,24 +70,18 @@ $ poetry install
 
 # Reads all PDFs from my_pdfs_dir and saves the resultant dataframe to my_df.parquet.gzip
 $ pdf2dataset my_pdfs_dir my_df.parquet.gzip  # Most basic, extract all possible features
-$ pdf2dataset my_pdfs_dir my_df.parquet.gzip  --features=text  # Extract just text
-$ pdf2dataset my_pdfs_dir my_df.parquet.gzip  --features=image  # Extract just image
+$ pdf2dataset my_pdfs_dir my_df.parquet.gzip --features=text  # Extract just text
+$ pdf2dataset my_pdfs_dir my_df.parquet.gzip --features=image  # Extract just image
 $ pdf2dataset my_pdfs_dir my_df.parquet.gzip --num-cpus 1  # Maximum reducing of parallelism
 $ pdf2dataset my_pdfs_dir my_df.parquet.gzip --ocr true  # For scanned PDFs
 $ pdf2dataset my_pdfs_dir my_df.parquet.gzip --ocr true --lang eng  # For scanned documents with english text
 ```
 
-### Save Processing Progress - CLI
+### Resume processing
 
-It's possible to save the progress to a temporary folder and resume from the saved state in case of
-any error or interruption. To resume the processing, just use the `--tmp-dir [directory]` flag:
-
-``` bash
-$ pdf2dataset my_pdfs_dir my_df.parquet.gzip --tmp-dir my_progress
-```
-
-The indicated temporary directory can also be used for debugging purposes and **is not** deleted
-automatically, so delete it when desired. 
+In case of any interruption, to resume the processing, just use the same path as output and the
+processing will be resumed automatically. The flag `--saving-interval` (or the param `saving_interval`)
+controls the frequency the output path will be updated, and so, the processing "checkpoints".
 
 
 ### Using as a library
@@ -105,7 +100,7 @@ There're some helper functions to facilitate pdf2dataset usage:
 ``` python
 from pdf2dataset import extract
 
-extract('my_pdfs_dir', 'all_features.parquet.gzip', tmp_dir='my_progress')
+extract('my_pdfs_dir', 'all_features.parquet.gzip')
 ```
 
 #### Small data
@@ -250,10 +245,10 @@ ValueError: There was a problem!
 ```
 
 Notes:
-* `@feature` is the decorator used to define new features
-* First argument to `@feature` must be a valid PyArrow type, complete list [here](https://arrow.apache.org/docs/python/api/datatypes.html).
+* `@feature` is the decorator used to define new features, additionally, the extraction method must start with the prefix `get_` (avoids collisions with attribute names and increases readability)
+* First argument to `@feature` must be a valid PyArrow type, complete list [here](https://arrow.apache.org/docs/python/api/datatypes.html)
 * `exceptions` param specify a list of exceptions to be recorded on DataFrame, otherwise they are raised
-* For this example, all available features plus the custom ones are extracted.
+* For this example, all available features plus the custom ones are extracted
 
 
 ### Results File
@@ -301,34 +296,49 @@ With version >= 0.2.0, only the head node needs to have access to the documents 
 ### CLI Help
 
 ```
-usage: pdf2dataset [-h] [--features FEATURES] [--tmp-dir TMP_DIR] [--ocr-lang OCR_LANG] [--ocr OCR] [--chunksize CHUNKSIZE] [--image-size IMAGE_SIZE] [--ocr-image-size OCR_IMAGE_SIZE]
-                   [--image-format IMAGE_FORMAT] [--num-cpus NUM_CPUS] [--address ADDRESS] [--webui-host WEBUI_HOST] [--redis-password REDIS_PASSWORD]
-                   input_dir results_file
+usage: pdf2dataset [-h] [--features FEATURES]
+                   [--saving-interval SAVING_INTERVAL] [--ocr-lang OCR_LANG]
+                   [--ocr OCR] [--chunksize CHUNKSIZE]
+                   [--image-size IMAGE_SIZE] [--ocr-image-size OCR_IMAGE_SIZE]
+                   [--image-format IMAGE_FORMAT] [--num-cpus NUM_CPUS]
+                   [--address ADDRESS] [--dashboard-host DASHBOARD_HOST]
+                   [--redis-password REDIS_PASSWORD]
+                   input_dir out_file
 
 Extract text from all PDF files in a directory
 
 positional arguments:
   input_dir             The folder to lookup for PDF files recursively
-  results_file          File to save the resultant dataframe
+  out_file              File to save the resultant dataframe
 
 optional arguments:
   -h, --help            show this help message and exit
-  --features FEATURES   Specify a comma separated list with the features you want to extract. 'path' and 'page' will always be added. Available features to add: image, text Examples: '--
-                        features=text,image' or '--features=all'
-  --tmp-dir TMP_DIR     The folder to keep all the results, including log files and intermediate files
+  --features FEATURES   Specify a comma separated list with the features you
+                        want to extract. 'path' and 'page' will always be
+                        added. Available features to add: image, page, path,
+                        text Examples: '--features=text,image' or '--
+                        features=all'
+  --saving-interval SAVING_INTERVAL
+                        Results will be persisted to results folder every
+                        saving interval of pages
   --ocr-lang OCR_LANG   Tesseract language
-  --ocr OCR             'pytesseract' if true, else 'pdftotext'. default: false
+  --ocr OCR             'pytesseract' if true, else 'pdftotext'. default:
+                        false
   --chunksize CHUNKSIZE
-                        Chunksize to use while processing pages, otherwise is calculated
+                        Chunksize to use while processing pages, otherwise is
+                        calculated
   --image-size IMAGE_SIZE
-                        If adding image feature, image will be resized to this size. Provide two integers separated by 'x'. Example: --image-size 1000x1414
+                        If adding image feature, image will be resized to this
+                        size. Provide two integers separated by 'x'. Example:
+                        --image-size 1000x1414
   --ocr-image-size OCR_IMAGE_SIZE
-                        The height of the image OCR will be applied. Width will be adjusted to keep the ratio.
+                        The height of the image OCR will be applied. Width
+                        will be adjusted to keep the ratio.
   --image-format IMAGE_FORMAT
                         Format of the image generated from the PDF pages
   --num-cpus NUM_CPUS   Number of cpus to use
   --address ADDRESS     Ray address to connect
-  --webui-host WEBUI_HOST
+  --dashboard-host DASHBOARD_HOST
                         Which IP ray webui will try to listen on
   --redis-password REDIS_PASSWORD
                         Redis password to use to connect with ray
