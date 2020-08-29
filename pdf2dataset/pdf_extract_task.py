@@ -96,6 +96,9 @@ class PdfExtractTask(ExtractTask):
 
         super().__init__(path, *args, **kwargs)
 
+    def __repr__(self):
+        return f'PdfExtractTask({self.path}, {self.page})'
+
     def _extract_text_ocr(self):
         image_bytes, _ = self.get_feature('image_original')
 

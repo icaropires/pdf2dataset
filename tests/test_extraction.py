@@ -1,5 +1,4 @@
 from io import BytesIO
-import re
 from pathlib import Path
 from hashlib import md5
 
@@ -9,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from pdf2dataset import (
-    Extraction,
+    ExtractionFromMemory,
     PdfExtractTask,
     extract,
     extract_text,
@@ -20,8 +19,8 @@ from pdf2dataset import (
 from .testing_dataframe import check_and_compare
 
 
-SAMPLES_DIR = 'tests/samples'
-TEST_IMAGE = Path(SAMPLES_DIR) / 'single_page1_1.jpeg'
+SAMPLES_DIR = Path('tests/samples')
+TEST_IMAGE = SAMPLES_DIR / 'single_page1_1.jpeg'
 PARQUET_ENGINE = 'pyarrow'
 
 
@@ -99,67 +98,67 @@ class TestExtractionCore:
     def test_append_result(self, tmp_path, expected_all):
         result_path = tmp_path / 'result.parquet.gzip'
 
-        extract(SAMPLES_DIR, result_path, chunk_df_size=1, features='all')
+        extract(SAMPLES_DIR, result_path, saving_interval=1, features='all')
 
         # Small 'chunk_df_size' to append to result multiple times
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
 
         check_and_compare(df, expected_all)
 
-    # TODO: Reenable feature
-    # def test_tmpdir(self, tmp_path, tmpdir):
-    #     result_path = tmp_path / 'result.parquet.gzip'
-    #     tmp_dir = Path(tmpdir.mkdir('tmp'))
+    def test_passing_paths_list(self, tmp_path, expected_all):
+        result_path = tmp_path / 'result.parquet.gzip'
+        files_list = Path(SAMPLES_DIR).rglob('*.pdf')
 
-    #     extract(SAMPLES_DIR, result_path, tmp_dir=tmp_dir)
+        # Test the support for paths as strings
+        files_list = [str(f) for f in files_list]
 
-    #     features = ['text', 'error']
-    #     folders = ['sub1', 'sub2']
-    #     prefix_pages = (
-    #         ('multi_page1', [1, 2, 3]),
-    #         ('single_page1', [1]),
-    #         ('sub1/copy_multi_page1', [1, 2, 3]),
-    #         ('sub2/copy_single_page1', [1]),
-    #         ('invalid1', [-1]),
-    #     )
+        df = extract(files_list, result_path, small=True)
 
-    #     expected_files = [
-    #             f'{prefix}_{feature}_{page}.txt'
-    #             for prefix, pages in prefix_pages
-    #             for page in pages
-    #             for feature in features
-    #     ]
+        # Paths will be relative to pwd, so adapting expected_all
+        expected_all['path'] = expected_all['path'].apply(
+            lambda p: str(SAMPLES_DIR / p)
+        )
+        check_and_compare(df, expected_all)
 
-    #     expected_files += folders
+    def test_filter_processed(self, tmp_path):
+        with open(SAMPLES_DIR / 'single_page1.pdf', 'rb') as f:
+            single = f.read()
 
-    #     tmp_files = list(tmp_dir.rglob('*'))
-    #     tmp_files = [str(f.relative_to(tmp_dir)) for f in tmp_files]
+        with open(SAMPLES_DIR / 'multi_page1.pdf', 'rb') as f:
+            multi = f.read()
 
-    #     assert sorted(tmp_files) == sorted(expected_files)
+        with open(SAMPLES_DIR / 'invalid1.pdf', 'rb') as f:
+            invalid = f.read()
 
-    @pytest.mark.parametrize('path,expected', (
-        ('multi_page1_text_1.txt',
-            {'path': 'multi_page1', 'page': '1', 'feature': 'text'}),
-        ('multi_page1_text_2.txt',
-            {'path': 'multi_page1', 'page': '2', 'feature': 'text'}),
-        ('multi_page1_text_3.txt',
-            {'path': 'multi_page1', 'page': '3', 'feature': 'text'}),
-        ('multi_page1_text_10.txt',
-            {'path': 'multi_page1', 'page': '10', 'feature': 'text'}),
-        ('multi_page1_path_101.txt',
-            {'path': 'multi_page1', 'page': '101', 'feature': 'path'}),
-        ('s1/s2/doc_image_1000.txt',
-            {'path': 's1/s2/doc', 'page': '1000', 'feature': 'image'}),
-        ('single_page1_my-feature_1.txt',
-            {'path': 'single_page1', 'page': '1', 'feature': 'my-feature'}),
-        ('invalid1_error_-10.txt',
-            {'path': 'invalid1', 'page': '-10', 'feature': 'error'}),
-        ('invalid1_error_10.txt',
-            {'path': 'invalid1', 'page': '10', 'feature': 'error'}),
-    ))
-    def test_path_pattern(self, path, expected):
-        result = re.match(Extraction._path_pat, path)
-        assert result.groupdict() == expected
+        total_tasks = [
+            ('single1.pdf', single),
+            ('multi1.pdf', multi, 2),
+            ('hey/multi2.pdf', multi, 1),
+            ('multi1.pdf', multi, 1),
+            ('my_dir/single3.pdf', single),
+            ('/opt/invalid.pdf', invalid),
+            ('multi1.pdf', multi, 3),
+            ('single2.pdf', single),
+            ('/tmp/single3.pdf', single),
+            ('/tmp/invalid.pdf', invalid),
+        ]
+
+        result_path = tmp_path / 'result.parquet.gzip'
+
+        for counter, task in enumerate(total_tasks):
+
+            extraction = ExtractionFromMemory(
+                total_tasks,
+                out_file=result_path,
+                features='text'
+            )
+
+            tasks = extraction.gen_tasks()
+            tasks = extraction.filter_processed_tasks(tasks)
+
+            assert len(tasks) == len(total_tasks) - counter
+
+            extract([task], result_path, features='text')
 
 
 class TestExtractionSmall:
@@ -227,29 +226,26 @@ class TestExtractionSmall:
 
 
 class TestParams:
-    def test_no_text(self, expected_all):
-        available_features = PdfExtractTask.list_features()
-        features = list(set(available_features) - set(['text']))
-
-        df = extract(SAMPLES_DIR, small=True, features=features)
-
-        columns = [c for c in expected_all.columns if c != 'text']
-        check_and_compare(df, expected_all[columns])
-
-    def test_no_image(self, expected_all):
-        available_features = PdfExtractTask.list_features()
-        features = list(set(available_features) - set(['image']))
-
-        df = extract(SAMPLES_DIR, small=True, features=features)
-
-        columns = [c for c in expected_all.columns if c != 'image']
-        check_and_compare(df, expected_all[columns])
-
     def test_features_as_list(self, expected_all):
         df = extract(SAMPLES_DIR, small=True, features=['text', 'image'])
         check_and_compare(df, expected_all)
 
-    def test_none(self, expected_all):
+    @pytest.mark.parametrize('excluded', [
+        'text',
+        'image',
+    ])
+    def test_exclude_feature(self, excluded, expected_all):
+        features = PdfExtractTask.list_features()
+        features.remove(excluded)
+
+        df = extract(SAMPLES_DIR, small=True, features=features)
+
+        columns = list(expected_all.columns)
+        columns.remove(excluded)
+
+        check_and_compare(df, expected_all[columns])
+
+    def test_empty_feature(self, expected_all):
         df = extract(SAMPLES_DIR, small=True, features='')
 
         columns = list(PdfExtractTask.fixed_featues) + ['error_bool']
@@ -327,10 +323,10 @@ class TestExtractionFromMemory:
         False,
     ))
     def test_passing_tasks(self, tmp_path, small):
-        with open('tests/samples/single_page1.pdf', 'rb') as f:
+        with open(SAMPLES_DIR / 'single_page1.pdf', 'rb') as f:
             pdf1_bin = f.read()
 
-        with open('tests/samples/multi_page1.pdf', 'rb') as f:
+        with open(SAMPLES_DIR / 'multi_page1.pdf', 'rb') as f:
             pdf2_bin = f.read()
 
         tasks = [

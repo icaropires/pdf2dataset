@@ -1,23 +1,25 @@
 from pathlib import Path
 
-from .extraction import Extraction, get_pages_range
+from .extraction import Extraction
 
 
 class ExtractionFromMemory(Extraction):
 
     def __init__(self, tasks, *args, **kwargs):
         self.tasks = tasks
-        kwargs['check_inputdir'] = False
 
-        super().__init__('', *args, **kwargs)
+        kwargs['check_input'] = False
 
-    def _gen_tasks(self, tasks):
-        return self._gen_extrationtasks(tasks)  # Just to make more semantic
+        super().__init__(None, *args, **kwargs)
+
+    def gen_tasks(self):
+        # Just to make more semantic
+        return self._gen_extrationtasks(self.tasks)
 
     def _gen_extrationtasks(self, tasks):
         ''' Generate extraction task from simplified tasks form.
 
-        Assumes is not a big volume, otherwise should save documents to
+        Assumes is not a big volume, otherwise should save files to
         a directory and use 'Extraction'. So, not going with
         multiprocessing here.
         '''
@@ -26,22 +28,22 @@ class ExtractionFromMemory(Extraction):
             page = None
 
             if len(task) == 2:
-                doc, doc_bin = task
+                file_, file_bin = task
             elif len(task) == 3:
-                doc, doc_bin, page = task
+                file_, file_bin, page = task
             else:
                 raise RuntimeError(
                     'Wrong task format, it must be'
-                    ' (document_name, document_bin)'
-                    ' or (document_name, document_bin, page_number)'
+                    ' (file_name, file_bin)'
+                    ' or (file_name, file_bin, page_number)'
                 )
 
-            if not str(doc).endswith('.pdf'):
+            if not str(file_).endswith('.pdf'):
                 raise RuntimeError(
-                    f"Document '{doc}' name must ends with '.pdf'"
+                    f"Document '{file_}' name must ends with '.pdf'"
                 )
 
-            range_pages = get_pages_range(doc, doc_bin=doc_bin)
+            range_pages = self.get_pages_range(file_, file_bin=file_bin)
 
             # -1 specifically because of the flag used by _get_pages_range
             if page in range_pages and not page == -1:
@@ -49,17 +51,17 @@ class ExtractionFromMemory(Extraction):
 
             elif page is not None:
                 raise RuntimeError(
-                    f"Page {page} doesn't exist in document {doc}!"
+                    f"Page {page} doesn't exist in file {file_}!"
                 )
 
-            return Path(doc).resolve(), doc_bin, range_pages
+            return Path(file_).resolve(), file_bin, range_pages
 
         tasks = [uniform(t) for t in tasks]
 
         new_tasks = []
-        for doc, doc_bin, range_pages in tasks:
+        for file_, file_bin, range_pages in tasks:
             new_tasks += [
-                self.task_class(doc, p, doc_bin, **self.task_params)
+                self.task_class(file_, p, file_bin, **self.task_params)
                 for p in range_pages
             ]
 
@@ -67,6 +69,6 @@ class ExtractionFromMemory(Extraction):
 
     def apply(self):
         # Coverts simplified notation tasks to extraction tasks
-        tasks = self._gen_tasks(self.tasks)
+        tasks = self.gen_tasks()
 
         return self._process_tasks(tasks)

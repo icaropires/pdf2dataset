@@ -2,20 +2,18 @@ import io
 import itertools as it
 import logging
 import os
-import threading
 from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Pool
+from multiprocessing import Pool, Process, Queue
 from pathlib import Path
 from more_itertools import ichunked
 
-import pandas as pd
-import dask.dataframe as dd
 import ray
 import pdftotext
 from tqdm import tqdm
 from pytesseract import get_tesseract_version
 
 from .pdf_extract_task import PdfExtractTask
+from .results import Results
 
 
 # TODO: Eventually, I'll reduce this file size!!
@@ -25,69 +23,43 @@ from .pdf_extract_task import PdfExtractTask
 # TODO: Substitute most (all?) prints for logs
 
 
-def get_pages_range(path, doc_bin=None):
-    # Using pdftotext to get num_pages because it's the best way I know
-    # pdftotext extracts lazy, so this won't process the text
-
-    try:
-        if not doc_bin:
-            with path.open('rb') as f:
-                num_pages = len(pdftotext.PDF(f))
-        else:
-            with io.BytesIO(doc_bin) as f:
-                num_pages = len(pdftotext.PDF(f))
-
-        pages = range(1, num_pages+1)
-    except pdftotext.Error:
-        pages = [-1]
-
-    return pages
-
-
 class Extraction:
-    _path_pat = r'(?P<path>.+)_(?P<feature>(\w|-)+)_(?P<page>-?\d+)\.txt'
 
     def __init__(
-        self, input_dir, results_file='', *, tmp_dir='',
-        small=False, check_inputdir=True, chunksize=None, chunk_df_size=10000,
-        max_docs_memory=3000, task_class=PdfExtractTask, doc_pattern='*.pdf',
+        self, input_dir=None, out_file=None, *,
+        files_list=None, task_class=PdfExtractTask,
 
+        # Config params
+        small=False, check_input=True, chunksize=None,
+        saving_interval=5000, max_files_memory=3000, files_pattern='*.pdf',
+
+        # Task_params
         ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
         image_format='jpeg', image_size=None,
 
         **ray_params
     ):
-        self.input_dir = Path(input_dir).resolve()
-        self.results_file = Path(results_file).resolve()
+        self.input_dir = Path(input_dir).resolve() if input_dir else None
+        self.files_list = [Path(f) for f in files_list] if files_list else None
 
-        if (check_inputdir and
-                (not (self.input_dir.exists() and self.input_dir.is_dir()))):
-            raise ValueError(f"Invalid input_dir: '{self.input_dir}',"
-                             " it must exists and be a directory")
+        self.out_file = Path(out_file).resolve() if out_file else None
+
+        if check_input:
+            self._check_input()
 
         if not small:
-            if not results_file:
-                raise ValueError("If not using 'small' arg,"
-                                 " 'results_file' is mandatory")
-
-            if self.results_file.exists():
-                logging.warning(f'{results_file} already exists!'
-                                ' Results will be appended to it!')
+            self._check_outfile()
 
         if ocr:
-            # Will raise exception if tesseract not found
+            # Will raise exception if tesseract was not found
             get_tesseract_version()
-
-        # Keep str and not Path, custom behaviour if is empty string
-        self.tmp_dir = tmp_dir
 
         self.num_cpus = ray_params.get('num_cpus') or os.cpu_count()
         self.ray_params = ray_params
         self.chunksize = chunksize
         self.small = small
-        self.max_docs_memory = max_docs_memory
-        self.chunk_df_size = chunk_df_size
-        self.doc_pattern = doc_pattern
+        self.max_files_memory = max_files_memory
+        self.files_pattern = files_pattern
 
         self.task_class = task_class
         self.task_params = {
@@ -99,112 +71,80 @@ class Extraction:
             'image_size': image_size,
         }
 
-        self._df_lock = threading.Lock()
+        columns = self.list_columns()
+        schema = self.task_class.get_schema(columns)
 
-    def get_docs(self, input_dir):
-        pdf_files = input_dir.rglob(self.doc_pattern)
+        max_results_size = saving_interval if not small else None
+        self.results = Results(
+            self.input_dir, self.out_file, schema, max_size=max_results_size
+        )
 
-        # Here feedback is better than keeping use of the generator
-        return list(tqdm(pdf_files, desc='Looking for files', unit='docs'))
+        self.results_queue = Queue(max_files_memory)
 
-    def _get_output_path(self, doc_path):
-        relative = doc_path.relative_to(self.input_dir)
-        try:
-            relative = doc_path.relative_to(self.input_dir)
-        except ValueError:
-            relative = doc_path
-
-        out_path = Path(self.tmp_dir) / relative
-
-        if self.tmp_dir:
-            out_path.parent.mkdir(parents=True, exist_ok=True)  # Side effect
-
-        return out_path
-
-    def _get_feature_path(self, path, page, feature):
-        output_path = self._get_output_path(Path(path))
-        basename = f'{output_path.stem}_{feature}_{page}.txt'
-
-        return output_path.with_name(basename)
-
-    @classmethod
-    def _preprocess_path(cls, df):
-        parsed = df['path'].str.extract(cls._path_pat)
-        df['path'] = parsed['path'] + '.pdf'
-
-        return df
-
-    def _doc_to_path(self, df):
-        any_feature = 'path'
-
-        def gen_path(row):
-            path = self._get_feature_path(row.path, row.page, any_feature)
-            return str(path)
-
-        df['path'] = df.apply(gen_path, axis=1)
-
-        return df
-
-    def _save_tmp_files(self, result):
-        # TODO: Reenable feature
-        raise NotImplementedError('For now, this feature is unavailable')
-
-        for feature in result:
-            if feature in ['path', 'page']:
-                continue
-
-            # TODO: save any format, not just text
-            path, page = result['path'], result['page']
-            path = self._get_feature_path(path, page, feature)
-            content = result[feature] or ''
-
-            Path(path).write_bytes(content)
-
-    def _to_df(self, results):
-        df = pd.DataFrame(results)
-
-        df = self._doc_to_path(df)
-        df = self._preprocess_path(df)
-
-        # Keep path and page as first columns
-        begin = list(self.task_class.fixed_featues)
-        columns = begin + [c for c in df.columns.to_list() if c not in begin]
-
-        return df[columns]
-
-    def _append_to_df(self, results):
-        df = self._to_df(results)
-        ddf = dd.from_pandas(df, npartitions=1)
-
-        exists = self.results_file.exists()
-        schema = self.task_class.get_schema(df.columns)
-
-        with self._df_lock:
-            # Dask has some optimizations over pure pyarrow,
-            #   like handling _metadata
-            ddf.to_parquet(
-                self.results_file, compression='gzip',
-                ignore_divisions=True, write_index=False,
-                schema=schema, append=exists, engine='pyarrow'
+    def _check_input(self):
+        if not any([self.input_dir, self.files_list]):
+            raise RuntimeError(
+                "Any of 'input_dir' or 'self.files_list' must be provided"
             )
 
-    def _gen_tasks(self, docs):
+        if not self.files_list:
+            self._check_inputdir()
+
+    def _check_inputdir(self):
+        if (not self.input_dir
+                or not (self.input_dir.exists() and self.input_dir.is_dir())):
+
+            raise ValueError(f"Invalid input_dir: '{self.input_dir}',"
+                             " it must exists and be a directory")
+
+    def _check_outfile(self):
+        if not self.out_file:
+            raise RuntimeError("If not using 'small' arg,"
+                               " 'out_file' is mandatory")
+
+    @property
+    def files(self):
+        if self.files_list:
+            return self.files_list
+
+        self.files_list = self.list_files()
+        return self.files_list
+
+    def list_columns(self):
+        aux_task = self.task_class(1, 1, **self.task_params)
+
+        columns = aux_task.sel_features
+
+        begin = list(aux_task.fixed_featues)
+        columns = begin + sorted(c for c in columns if c not in begin)
+
+        columns.append('error')  # Always last
+
+        return columns
+
+    def list_files(self):
+        pdf_files = self.input_dir.rglob(self.files_pattern)
+
+        # Here feedback is better than keeping use of the generator
+        return list(tqdm(pdf_files, desc='Looking for files', unit='files'))
+
+    def gen_tasks(self):
         '''
         Returns tasks to be processed.
-        For faulty documents, only the page -1 will be available
+        For faulty files, only the page -1 will be available
         '''
         # 10 because this is a fast operation
-        chunksize = int(max(1, (len(docs)/self.num_cpus)//10))
+        chunksize = int(max(1, (len(self.files)/self.num_cpus)//10))
 
         tasks = []
         with Pool(self.num_cpus) as pool, \
                 tqdm(desc='Counting pages', unit='pages') as pbar:
 
             results = pool.imap(
-                get_pages_range, docs, chunksize=chunksize
+                self.get_pages_range, self.files, chunksize=chunksize
             )
 
-            for path, range_pages in zip(docs, results):
+            for path, range_pages in zip(self.files, results):
                 new_tasks = [
                     self.task_class(path, p, **self.task_params)
                     for p in range_pages
@@ -214,56 +154,34 @@ class Extraction:
 
         return tasks
 
-    def _get_features_list(self, sample_task):
-        sample_task = ([], [sample_task])
-        sample_result = self._apply_to_small(sample_task, 1, progress=False)
+    @staticmethod
+    def get_pages_range(file_path, file_bin=None):
+        # Using pdftotext to get num_pages because it's the best way I know
+        # pdftotext extracts lazy, so this won't process the text
 
-        return sample_result.columns
-
-    def _load_procesed_tasks(self, processed):
-        if not processed:
-            return []
-
-        features = self._get_features_list(processed[0])
-
-        def load(task):
-            paths = {f: self._get_feature_path(task.path, task.page, f)
-                     for f in features if f not in ['path', 'page']}
-
-            result = {f: p.read_text() or None for f, p in paths.items()}
-            result['path'] = task.path
-            result['page'] = task.page
-
-            return result
-
-        return [load(task) for task in processed]
-
-    def _split_processed_tasks(self, tasks):
-        features = self._get_features_list(tasks[0])
-
-        processed, not_processed = [], []
-        for task in tasks:
-            paths = (
-                self._get_feature_path(task.path, task.page, f) for f in
-                features if f not in self.task_class.fixed_featues
-            )
-
-            if all(p.exists() for p in paths):
-                processed.append(task)
+        try:
+            if not file_bin:
+                with file_path.open('rb') as f:
+                    num_pages = len(pdftotext.PDF(f))
             else:
-                not_processed.append(task)
+                with io.BytesIO(file_bin) as f:
+                    num_pages = len(pdftotext.PDF(f))
 
-        return processed, not_processed
+            pages = range(1, num_pages+1)
+        except pdftotext.Error:
+            pages = [-1]
+
+        return pages
 
     @staticmethod
-    def _get_pbar(tasks_results, num_tasks):
+    def _get_processing_bar(num_tasks, iterable=None):
         return tqdm(
-            tasks_results, total=num_tasks,
+            iterable, total=num_tasks,
             desc='Processing pages', unit='pages', dynamic_ncols=True
         )
 
     @staticmethod
-    def _load_task_bin(task):
+    def copy_and_load_task(task):
         task = task.copy()  # Copy to have control over memory references
         task.load_bin()
 
@@ -271,90 +189,85 @@ class Extraction:
 
     @staticmethod
     @ray.remote
-    def process_chunk_ray(chunk):
+    def _process_chunk_ray(chunk):
         return [t.process() for t in chunk]
 
-    def _ray_process(self, tasks):
-        tasks = iter(tasks)
-        futures = []
+    @staticmethod
+    def _submit_chunk_ray(chunk):
+        with ThreadPoolExecutor() as executor:
+            chunk = list(executor.map(Extraction.copy_and_load_task, chunk))
 
+        return Extraction._process_chunk_ray.remote(chunk)
+
+    def _ray_process_aux(self, tasks, results_queue):
         chunks = ichunked(tasks, int(self.chunksize))
+        num_initial = int(ray.available_resources()['CPU'])
 
-        for chunk in chunks:
-            chunk = [self._load_task_bin(task) for task in chunk]
-            futures.append(self.process_chunk_ray.remote(chunk))
+        futures = [self._submit_chunk_ray(c)
+                   for c in it.islice(chunks, num_initial)]
 
-            if len(futures) >= self.num_cpus + 4:
-                break
+        with self._get_processing_bar(len(tasks)) as progress_bar:
+            while futures:
+                (finished, *_), rest = ray.wait(futures, num_returns=1)
 
-        while futures:
-            finished, rest = ray.wait(futures, num_returns=1)
-            results = ray.get(finished[0])
+                result = ray.get(finished)
+                results_queue.put(result)
 
-            for result in results:
-                yield result
+                progress_bar.update(len(result))
 
-            try:
-                chunk = next(chunks)
-            except StopIteration:
-                ...
-            else:
-                chunk = [self._load_task_bin(t) for t in chunk]
-                rest.append(self.process_chunk_ray.remote(chunk))
+                try:
+                    chunk = next(chunks)
+                except StopIteration:
+                    ...
+                else:
+                    rest.append(self._submit_chunk_ray(chunk))
 
-            futures = rest
+                futures = rest
 
-    def _apply_to_big(self, tasks, num_tasks, progress=True):
+        results_queue.put(None)
+
+    def _ray_process(self, *args, **kwargs):
+        ray.init(**self.ray_params)
+
+        try:
+            self._ray_process_aux(*args, **kwargs)
+        finally:
+            ray.shutdown()
+
+    def _apply_to_big(self, tasks):
         'Apply the extraction to a big volume of data'
 
         print('\n=== SUMMARY ===',
               f'PDFs directory: {self.input_dir}',
-              f'Results file: {self.results_file}',
+              f'Results file: {self.out_file}',
               f'Using {self.num_cpus} CPU(s)',
               f'Chunksize: {self.chunksize}',
-              f'Temporary directory: {self.tmp_dir or "not used"}',
               sep='\n', end='\n\n')
 
-        # TODO: Add queue
-        with ThreadPoolExecutor(max_workers=4) as e:
-            processed, not_processed = tasks
+        Process(
+            target=self._ray_process,
+            args=(tasks, self.results_queue)
+        ).start()
 
-            not_processed = self._ray_process(not_processed)
-            processing_tasks = it.chain(processed, not_processed)
+        while True:
+            result_chunk = self.results_queue.get()
 
-            if progress:
-                processing_tasks = self._get_pbar(processing_tasks, num_tasks)
+            if isinstance(result_chunk, Exception):
+                raise result_chunk
 
-            thread_fs, results = [], []
-            for result in processing_tasks:
-                if isinstance(result, Exception):
-                    raise result
+            if result_chunk is None:
+                break
 
-                results.append(result)
+            self.results.append(result_chunk)
 
-                if self.tmp_dir:
-                    f = e.submit(self._save_tmp_files, result)
-                    thread_fs.append(f)
-
-                if len(results) >= self.chunk_df_size:
-                    # Persist to disk, aiming large amount of data
-                    f = e.submit(self._append_to_df, results)
-                    thread_fs.append(f)
-
-                    results = []
-
-            if results:
-                f = e.submit(self._append_to_df, results)
-                thread_fs.append(f)
-
-            for f in thread_fs:  # Avoid fail silently
-                f.result()
+        if self.results:
+            self.results.write_and_clear()
 
     @staticmethod
     def _process_task(task):
         return task.process()
 
-    def _apply_to_small(self, tasks, num_tasks, progress=True):
+    def _apply_to_small(self, tasks):
         ''''Apply the extraction to a small volume of data
         More direct approach than 'big', but with these differences:
             - Not saving progress
@@ -363,53 +276,46 @@ class Extraction:
             - Returns the resultant dataframe
         '''
 
-        processed, not_processed = tasks
-        not_processed = (self._load_task_bin(t) for t in not_processed)
+        num_tasks = len(tasks)
+        tasks = (self.copy_and_load_task(t) for t in tasks)
 
-        results = []
         with Pool(self.num_cpus) as pool:
-            processing_tasks = pool.imap_unordered(self._process_task,
-                                                   not_processed)
-            processing_tasks = it.chain(processed, processing_tasks)
+            processing_tasks = pool.imap_unordered(self._process_task, tasks)
+            results = self._get_processing_bar(num_tasks, processing_tasks)
 
-            if progress:
-                processing_tasks = self._get_pbar(processing_tasks, num_tasks)
+            self.results.append(results)
 
-            results = list(processing_tasks)
+        return self.results.get()
 
-        return self._to_df(results)
+    def filter_processed_tasks(self, tasks):
+        is_processed = self.results.is_tasks_processed(tasks)
+        tasks = [t for t, is_ in zip(tasks, is_processed) if not is_]
+
+        return tasks
 
     def _process_tasks(self, tasks):
-        processed, not_processed = self._split_processed_tasks(tasks)
-        processed = self._load_procesed_tasks(processed)
+        num_total_tasks = len(tasks)
+        tasks = self.filter_processed_tasks(tasks)
+        num_skipped = num_total_tasks - len(tasks)
 
-        num_tasks = len(tasks)
-        tasks = (processed, not_processed)
-
-        if processed:
+        if num_skipped:
             logging.warning(
-                f"Skipping {len(processed)} already"
-                f" processed pages in directory '{self.tmp_dir}'"
+                "'%s' have already %d processed pages, skipping these...",
+                self.out_file, num_skipped
             )
 
         if self.chunksize is None:
-            chunk_by_cpu = (len(not_processed)/self.num_cpus) / 100
-            max_chunksize = self.max_docs_memory // self.num_cpus
+            chunk_by_cpu = (len(tasks)/self.num_cpus) / 100
+            max_chunksize = self.max_files_memory // self.num_cpus
             self.chunksize = int(max(1, min(chunk_by_cpu, max_chunksize)))
 
         if self.small:
-            return self._apply_to_small(tasks, num_tasks)
+            return self._apply_to_small(tasks)
 
-        try:
-            ray.init(**self.ray_params)
-            self._apply_to_big(tasks, num_tasks)
-        finally:
-            ray.shutdown()
+        self._apply_to_big(tasks)
 
-        return self.results_file
+        return self.out_file
 
     def apply(self):
-        docs = self.get_docs(self.input_dir)
-        tasks = self._gen_tasks(docs)
-
+        tasks = self.gen_tasks()
         return self._process_tasks(tasks)
