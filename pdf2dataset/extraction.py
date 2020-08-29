@@ -40,7 +40,7 @@ class Extraction:
         **ray_params
     ):
         self.input_dir = Path(input_dir).resolve() if input_dir else None
-        self.files_list = files_list
+        self.files_list = [Path(f) for f in files_list] if files_list else None
 
         self.out_file = Path(out_file).resolve() if out_file else None
 

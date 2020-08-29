@@ -98,7 +98,7 @@ class TestExtractionCore:
     def test_append_result(self, tmp_path, expected_all):
         result_path = tmp_path / 'result.parquet.gzip'
 
-        extract(SAMPLES_DIR, result_path, chunk_df_size=1, features='all')
+        extract(SAMPLES_DIR, result_path, saving_interval=1, features='all')
 
         # Small 'chunk_df_size' to append to result multiple times
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
@@ -107,7 +107,10 @@ class TestExtractionCore:
 
     def test_passing_paths_list(self, tmp_path, expected_all):
         result_path = tmp_path / 'result.parquet.gzip'
-        files_list = list(Path(SAMPLES_DIR).rglob('*.pdf'))
+        files_list = Path(SAMPLES_DIR).rglob('*.pdf')
+
+        # Test the support for paths as strings
+        files_list = [str(f) for f in files_list]
 
         df = extract(files_list, result_path, small=True)
 

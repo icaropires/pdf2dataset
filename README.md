@@ -124,6 +124,25 @@ df = extract_text('my_pdfs_dir', small=True)
 # ...
 ```
 
+#### Pass list of files paths
+
+Instead of specifying a directory, one can specify a list of files to be processed.
+
+###### Example:
+
+``` python
+from pdf2dataset import extract
+
+
+my_files = [
+    './tests/samples/single_page1.pdf',
+    './tests/samples/invalid1.pdf',
+]
+
+df = extract(my_files, small=True)
+# ...
+```
+
 #### Pass files from memory
 
 If you don't want to specify a directory for the documents, you can specify the tasks that
