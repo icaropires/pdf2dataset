@@ -61,6 +61,8 @@ class Extraction:
         self.max_files_memory = max_files_memory
         self.files_pattern = files_pattern
 
+        self.num_skipped = None
+
         self.task_class = task_class
         self.task_params = {
             'sel_features': features,
@@ -173,10 +175,11 @@ class Extraction:
 
         return pages
 
-    @staticmethod
-    def _get_processing_bar(num_tasks, iterable=None):
+    def _get_processing_bar(self, num_tasks, iterable=None):
+        num_skipped = self.num_skipped or 0
+
         return tqdm(
-            iterable, total=num_tasks,
+            iterable, total=num_tasks, initial=num_skipped,
             desc='Processing pages', unit='pages', dynamic_ncols=True
         )
 
@@ -203,10 +206,10 @@ class Extraction:
         chunks = ichunked(tasks, int(self.chunksize))
         num_initial = int(ray.available_resources()['CPU'])
 
-        futures = [self._submit_chunk_ray(c)
-                   for c in it.islice(chunks, num_initial)]
-
         with self._get_processing_bar(len(tasks)) as progress_bar:
+            futures = [self._submit_chunk_ray(c)
+                       for c in it.islice(chunks, num_initial)]
+
             while futures:
                 (finished, *_), rest = ray.wait(futures, num_returns=1)
 
@@ -294,16 +297,6 @@ class Extraction:
         return tasks
 
     def _process_tasks(self, tasks):
-        num_total_tasks = len(tasks)
-        tasks = self.filter_processed_tasks(tasks)
-        num_skipped = num_total_tasks - len(tasks)
-
-        if num_skipped:
-            logging.warning(
-                "'%s' have already %d processed pages, skipping these...",
-                self.out_file, num_skipped
-            )
-
         if self.chunksize is None:
             chunk_by_cpu = (len(tasks)/self.num_cpus) / 100
             max_chunksize = self.max_files_memory // self.num_cpus
@@ -318,4 +311,15 @@ class Extraction:
 
     def apply(self):
         tasks = self.gen_tasks()
+
+        num_total_tasks = len(tasks)
+        tasks = self.filter_processed_tasks(tasks)
+        self.num_skipped = num_total_tasks - len(tasks)
+
+        if self.num_skipped:
+            logging.warning(
+                "'%s' have already %d processed pages, skipping these...",
+                self.out_file, self.num_skipped
+            )
+
         return self._process_tasks(tasks)
