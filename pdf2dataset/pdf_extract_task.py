@@ -8,6 +8,7 @@ import pdftotext
 from pdf2image import convert_from_bytes
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError
 from PIL import Image as PilImage
+from PIL.Image import DecompressionBombError
 
 from .extract_task import ExtractTask, feature
 
@@ -117,8 +118,10 @@ class PdfExtractTask(ExtractTask):
 
         return text
 
-    @feature('binary', is_helper=True,
-             exceptions=(PDFPageCountError, PDFSyntaxError))
+    @feature(
+        'binary', is_helper=True,
+        exceptions=(PDFPageCountError, PDFSyntaxError, DecompressionBombError)
+    )
     def get_image_original(self):
         images = convert_from_bytes(
             self.file_bin, first_page=self.page,

@@ -88,7 +88,7 @@ class Results:
     def is_tasks_processed(self, tasks):
         def gen_is_processed(df):
             num_checked = 0
-            all_tasks = set(tuple(task) for _, *task in df.itertuples())
+            all_tasks = set(tuple(task) for task in df.itertuples(index=False))
 
             for task in tasks:
                 if num_checked == len(tasks):
