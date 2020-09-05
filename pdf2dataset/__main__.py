@@ -54,7 +54,7 @@ def main():
         help="'pytesseract' if true, else 'pdftotext'. default: false"
     )
     parser.add_argument(
-        '--chunksize',
+        '--chunk_size',
         type=int,
         help="Chunksize to use while processing pages, otherwise is calculated"
     )

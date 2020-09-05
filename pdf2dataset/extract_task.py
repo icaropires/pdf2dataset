@@ -160,11 +160,6 @@ class ExtractTask(ABC):
         return self._features[name], self._errors[name]
 
     def process(self):
-        if not self.file_bin:
-            raise RuntimeError(
-                "'file_bin' can't be empty for processing the task!"
-            )
-
         return self._gen_result()
 
     def _gen_result(self):

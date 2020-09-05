@@ -13,6 +13,9 @@ from PIL.Image import DecompressionBombError
 from .extract_task import ExtractTask, feature
 
 
+PilImage.MAX_IMAGE_PIXELS = None
+
+
 class Image:
 
     def __init__(self, image, image_format=None):

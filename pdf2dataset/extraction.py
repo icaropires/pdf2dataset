@@ -2,10 +2,15 @@ import io
 import itertools as it
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
-from multiprocessing import Pool, Process, Queue
+from time import sleep
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Executor
+import queue
+from threading import Thread
+from multiprocessing import Pool, Process, Queue, Value
 from pathlib import Path
 from more_itertools import ichunked
+from collections import deque
+from functools import partial
 
 import ray
 import pdftotext
@@ -30,8 +35,8 @@ class Extraction:
         files_list=None, task_class=PdfExtractTask,
 
         # Config params
-        small=False, check_input=True, chunksize=None,
-        saving_interval=5000, max_files_memory=3000, files_pattern='*.pdf',
+        small=False, check_input=True, chunk_size=None,
+        saving_interval=5000, max_files_memory=1000, files_pattern='*.pdf',
 
         # Task_params
         ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
@@ -56,7 +61,7 @@ class Extraction:
 
         self.num_cpus = ray_params.get('num_cpus') or os.cpu_count()
         self.ray_params = ray_params
-        self.chunksize = chunksize
+        self.chunk_size = chunk_size
         self.small = small
         self.max_files_memory = max_files_memory
         self.files_pattern = files_pattern
@@ -81,7 +86,8 @@ class Extraction:
             self.input_dir, self.out_file, schema, max_size=max_results_size
         )
 
-        self.results_queue = Queue(max_files_memory)
+        self.tasks_queue = Queue()
+        self.loaded_tasks_queue = Queue(max_files_memory)
 
     def _check_input(self):
         if not any([self.input_dir, self.files_list]):
@@ -109,12 +115,11 @@ class Extraction:
         if self.files_list:
             return self.files_list
 
-        self.files_list = self.list_files()
+        self.files_list = self.search_files()
         return self.files_list
 
     def list_columns(self):
         aux_task = self.task_class(1, 1, **self.task_params)
-
         columns = aux_task.sel_features
 
         begin = list(aux_task.fixed_featues)
@@ -124,37 +129,63 @@ class Extraction:
 
         return columns
 
-    def list_files(self):
+    def search_files(self):
         pdf_files = self.input_dir.rglob(self.files_pattern)
 
         # Here feedback is better than keeping use of the generator
         return list(tqdm(pdf_files, desc='Looking for files', unit='files'))
 
-    def gen_tasks(self):
+    def _load_tasks(self):
+        def load_and_put(task):
+            task = task.copy()
+            task.load_bin()
+
+            # print('======> ', self.loaded_tasks_queue.qsize())
+            self.loaded_tasks_queue.put(task)
+
+        futures = []
+        with ThreadPoolExecutor() as executor:
+            for task in iter(self.tasks_queue.get, None):
+                future = executor.submit(load_and_put, task)
+                futures.append(future)
+
+            for future in futures:
+                future.result()
+
+        self.loaded_tasks_queue.put(None)
+
+    def _gen_tasks_proc(self, total_tasks):
+        load_thread = Thread(target=self._load_tasks)
+        load_thread.start()
+
+        gen_tasks = partial(
+            self.gen_tasks,
+            task_class=self.task_class, task_params=self.task_params
+        )
+
+        with Pool(self.num_cpus) as pool:
+            mapping = pool.imap_unordered(gen_tasks, self.files)
+            tasks = it.chain.from_iterable(mapping)
+
+            for task in tasks:
+                self.tasks_queue.put(task)
+                total_tasks.value += 1
+
+        self.tasks_queue.put(None)
+        load_thread.join()
+
+    @classmethod
+    def gen_tasks(cls, path, task_class, task_params):
         '''
         Returns tasks to be processed.
+        Can't be instance class, because of the pool
         For faulty files, only the page -1 will be available
         '''
-        # 10 because this is a fast operation
-        chunksize = int(max(1, (len(self.files)/self.num_cpus)//10))
+        def gen_task(page):
+            file_bin = path.read_bytes()
+            return task_class(path, page, **task_params)
 
-        tasks = []
-        with Pool(self.num_cpus) as pool, \
-                tqdm(desc='Counting pages', unit='pages') as pbar:
-
-            results = pool.imap(
-                self.get_pages_range, self.files, chunksize=chunksize
-            )
-
-            for path, range_pages in zip(self.files, results):
-                new_tasks = [
-                    self.task_class(path, p, **self.task_params)
-                    for p in range_pages
-                ]
-                tasks += new_tasks
-                pbar.update(len(range_pages))
-
-        return tasks
+        return [gen_task(page) for page in cls.get_pages_range(path)]
 
     @staticmethod
     def get_pages_range(file_path, file_bin=None):
@@ -179,63 +210,56 @@ class Extraction:
         num_skipped = self.num_skipped or 0
 
         return tqdm(
-            iterable, total=num_tasks, initial=num_skipped,
+            iterable, total=num_tasks+num_skipped, initial=num_skipped,
             desc='Processing pages', unit='pages', dynamic_ncols=True
         )
-
-    @staticmethod
-    def copy_and_load_task(task):
-        task = task.copy()  # Copy to have control over memory references
-        task.load_bin()
-
-        return task
 
     @staticmethod
     @ray.remote
     def _process_chunk_ray(chunk):
         return [t.process() for t in chunk]
 
-    @staticmethod
-    def _submit_chunk_ray(chunk):
-        with ThreadPoolExecutor() as executor:
-            chunk = list(executor.map(Extraction.copy_and_load_task, chunk))
+    def _ray_producer(self, loaded_tasks_queue, futures_queue):
+        loaded_tasks = iter(loaded_tasks_queue.get, None)
+        chunks = ichunked(loaded_tasks, self.chunk_size)
 
-        return Extraction._process_chunk_ray.remote(chunk)
+        for chunk in chunks:
+            future = self._process_chunk_ray.remote(list(chunk))
+            futures_queue.put(future)
 
-    def _ray_process_aux(self, tasks, results_queue):
-        chunks = ichunked(tasks, int(self.chunksize))
-        num_initial = int(ray.available_resources()['CPU'])
+        futures_queue.put(None)
 
-        with self._get_processing_bar(len(tasks)) as progress_bar:
-            futures = [self._submit_chunk_ray(c)
-                       for c in it.islice(chunks, num_initial)]
+    def _ray_consumer(self, results_queue, futures_queue):
+        for future in iter(futures_queue.get, None):
+            (finished, *_), rest = ray.wait([future], num_returns=1)
+            result = ray.get(finished)
 
-            while futures:
-                (finished, *_), rest = ray.wait(futures, num_returns=1)
-
-                result = ray.get(finished)
-                results_queue.put(result)
-
-                progress_bar.update(len(result))
-
-                try:
-                    chunk = next(chunks)
-                except StopIteration:
-                    ...
-                else:
-                    rest.append(self._submit_chunk_ray(chunk))
-
-                futures = rest
+            results_queue.put(result)
 
         results_queue.put(None)
 
-    def _ray_process(self, *args, **kwargs):
+    def _ray_process_proc(self, loaded_tasks_queue, results_queue):
         ray.init(**self.ray_params)
 
-        try:
-            self._ray_process_aux(*args, **kwargs)
-        finally:
-            ray.shutdown()
+        max_futures = int(ray.available_resources()['CPU']) * 2
+        futures_queue = queue.Queue(max_futures)
+
+        with ThreadPoolExecutor(2) as executor:
+            producer = executor.submit(self._ray_producer, loaded_tasks_queue, futures_queue)
+            consumer = executor.submit(self._ray_consumer,  results_queue, futures_queue)
+
+            try:
+                producer.result()
+                consumer.result()
+            finally:
+                ray.shutdown()
+
+    def _update_bar_total(self, progress_bar, total_tasks):
+        while True:
+            progress_bar.total = total_tasks.value
+            progress_bar.refresh()
+
+            sleep(0.2)
 
     def _apply_to_big(self, tasks):
         'Apply the extraction to a big volume of data'
@@ -244,27 +268,42 @@ class Extraction:
               f'PDFs directory: {self.input_dir}',
               f'Results file: {self.out_file}',
               f'Using {self.num_cpus} CPU(s)',
-              f'Chunksize: {self.chunksize}',
+              f'Chunksize: {self.chunk_size}',
               sep='\n', end='\n\n')
 
-        Process(
-            target=self._ray_process,
-            args=(tasks, self.results_queue)
-        ).start()
+        results_queue = Queue()
 
-        while True:
-            result_chunk = self.results_queue.get()
+        total_tasks = Value('i', 0)
+        progress_bar = self._get_processing_bar(0)
+        Thread(target=self._update_bar_total, args=(progress_bar, total_tasks), daemon=True).start()
 
-            if isinstance(result_chunk, Exception):
-                raise result_chunk
+        gen_tasks_proc = Process(target=self._gen_tasks_proc, args=(total_tasks,))
+        ray_proc = Process(target=self._ray_process_proc, args=(self.loaded_tasks_queue, results_queue))
 
-            if result_chunk is None:
-                break
+        gen_tasks_proc.start()
+        ray_proc.start()
 
-            self.results.append(result_chunk)
+        try:
+            for result_chunk in iter(results_queue.get, None):
+                if isinstance(result_chunk, Exception):
+                    raise result_chunk
 
-        if self.results:
-            self.results.write_and_clear()
+                self.results.append(result_chunk)
+                progress_bar.update(len(result_chunk))
+
+            if self.results:
+                self.results.write_and_clear()
+
+            gen_tasks_proc.join()
+            ray_proc.join()
+
+        except KeyboardInterrupt:
+            gen_tasks_proc.terminate()
+            ray_proc.terminate()
+
+        finally:
+            gen_tasks_proc.close()
+            ray_proc.close()
 
     @staticmethod
     def _process_task(task):
@@ -297,29 +336,28 @@ class Extraction:
         return tasks
 
     def _process_tasks(self, tasks):
-        if self.chunksize is None:
-            chunk_by_cpu = (len(tasks)/self.num_cpus) / 100
-            max_chunksize = self.max_files_memory // self.num_cpus
-            self.chunksize = int(max(1, min(chunk_by_cpu, max_chunksize)))
+        self.chunk_size = 40
+        # if self.chunk_size is None:
+        #     chunk_by_cpu = (len(tasks)/self.num_cpus) / 100
+        #     max_chunksize = self.max_files_memory // self.num_cpus
+        #     self.chunk_size = int(max(1, min(chunk_by_cpu, max_chunksize)))
 
-        if self.small:
-            return self._apply_to_small(tasks)
+        # if self.small:
+        #     return self._apply_to_small(tasks)
 
         self._apply_to_big(tasks)
 
         return self.out_file
 
     def apply(self):
-        tasks = self.gen_tasks()
+        # num_total_tasks = len(tasks)
+        # tasks = self.filter_processed_tasks(tasks)
+        # self.num_skipped = num_total_tasks - len(tasks)
 
-        num_total_tasks = len(tasks)
-        tasks = self.filter_processed_tasks(tasks)
-        self.num_skipped = num_total_tasks - len(tasks)
+        # if self.num_skipped:
+        #     logging.warning(
+        #         "'%s' have already %d processed pages, skipping these...",
+        #         self.out_file, self.num_skipped
+        #     )
 
-        if self.num_skipped:
-            logging.warning(
-                "'%s' have already %d processed pages, skipping these...",
-                self.out_file, self.num_skipped
-            )
-
-        return self._process_tasks(tasks)
+        return self._process_tasks(None)
