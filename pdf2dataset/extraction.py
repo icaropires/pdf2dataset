@@ -3,7 +3,7 @@ import itertools as it
 import logging
 import os
 from time import sleep
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, Executor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, wait, FIRST_EXCEPTION, as_completed
 import queue
 from threading import Thread
 from multiprocessing import Pool, Process, Queue, Value
@@ -140,7 +140,6 @@ class Extraction:
             task = task.copy()
             task.load_bin()
 
-            # print('======> ', self.loaded_tasks_queue.qsize())
             self.loaded_tasks_queue.put(task)
 
         futures = []
@@ -219,18 +218,54 @@ class Extraction:
     def _process_chunk_ray(chunk):
         return [t.process() for t in chunk]
 
-    def _ray_producer(self, loaded_tasks_queue, futures_queue):
+#    def _ray_producer(self, loaded_tasks_queue, refs_queue):
+#        loaded_tasks = iter(loaded_tasks_queue.get, None)
+#        chunks = ichunked(loaded_tasks, self.chunk_size)
+#
+#        import timeit
+#        c = 0
+#        n = 0
+#        for chunk in chunks:
+#            start = timeit.default_timer()
+#            future = self._process_chunk_ray.remote(list(chunk))
+#            c += timeit.default_timer() - start
+#            n += 1
+#            
+#            refs_queue.put(future)
+#
+#            if n % 100 == 0:
+#                print('@@@@@@@@@@@@@@@@@')
+#                print(c/n)
+#                print('@@@@@@@@@@@@@@@@@')
+#        refs_queue.put(None)
+
+    def _ray_producer(self, loaded_tasks_queue, refs_queue):
         loaded_tasks = iter(loaded_tasks_queue.get, None)
-        chunks = ichunked(loaded_tasks, self.chunk_size)
+        submit_fn = self._process_chunk_ray.remote
 
-        for chunk in chunks:
-            future = self._process_chunk_ray.remote(list(chunk))
-            futures_queue.put(future)
+        has_finished = False
 
-        futures_queue.put(None)
+        with ThreadPoolExecutor() as executor:
+            while not has_finished:
+                futures = []
 
-    def _ray_consumer(self, results_queue, futures_queue):
-        for future in iter(futures_queue.get, None):
+                for _ in range(refs_queue.maxsize):
+                    chunk = list(it.islice(loaded_tasks, self.chunk_size))
+
+                    if not chunk:
+                        has_finished = True
+                        break
+
+                    future = executor.submit(submit_fn, chunk)
+                    futures.append(future)
+
+                for future in as_completed(futures):
+                    refs_queue.put(future.result())
+
+            refs_queue.put(None)
+
+    def _ray_consumer(self, results_queue, refs_queue):
+        for future in iter(refs_queue.get, None):
             (finished, *_), rest = ray.wait([future], num_returns=1)
             result = ray.get(finished)
 
@@ -241,18 +276,19 @@ class Extraction:
     def _ray_process_proc(self, loaded_tasks_queue, results_queue):
         ray.init(**self.ray_params)
 
-        max_futures = int(ray.available_resources()['CPU']) * 2
-        futures_queue = queue.Queue(max_futures)
+        max_futures = int(ray.available_resources()['CPU']) * 3  # TODO: create variable
+        refs_queue = queue.Queue(max_futures)
 
-        with ThreadPoolExecutor(2) as executor:
-            producer = executor.submit(self._ray_producer, loaded_tasks_queue, futures_queue)
-            consumer = executor.submit(self._ray_consumer,  results_queue, futures_queue)
+        # Not using 'with' because was blocking exceptions to be raised
+        executor = ThreadPoolExecutor(2)
 
-            try:
-                producer.result()
-                consumer.result()
-            finally:
-                ray.shutdown()
+        producer = executor.submit(self._ray_producer, loaded_tasks_queue, refs_queue)
+        consumer = executor.submit(self._ray_consumer,  results_queue, refs_queue)
+
+        for f in as_completed([producer, consumer]):
+            f.result()
+
+        executor.shutdown()
 
     def _update_bar_total(self, progress_bar, total_tasks):
         while True:
@@ -272,38 +308,38 @@ class Extraction:
               sep='\n', end='\n\n')
 
         results_queue = Queue()
-
         total_tasks = Value('i', 0)
-        progress_bar = self._get_processing_bar(0)
-        Thread(target=self._update_bar_total, args=(progress_bar, total_tasks), daemon=True).start()
 
-        gen_tasks_proc = Process(target=self._gen_tasks_proc, args=(total_tasks,))
-        ray_proc = Process(target=self._ray_process_proc, args=(self.loaded_tasks_queue, results_queue))
+        with self._get_processing_bar(0) as progress_bar:
+            Thread(target=self._update_bar_total, args=(progress_bar, total_tasks), daemon=True).start()
 
-        gen_tasks_proc.start()
-        ray_proc.start()
+            gen_tasks_proc = Process(target=self._gen_tasks_proc, args=(total_tasks,))
+            ray_proc = Process(target=self._ray_process_proc, args=(self.loaded_tasks_queue, results_queue))
 
-        try:
-            for result_chunk in iter(results_queue.get, None):
-                if isinstance(result_chunk, Exception):
-                    raise result_chunk
+            gen_tasks_proc.start()
+            ray_proc.start()
 
-                self.results.append(result_chunk)
-                progress_bar.update(len(result_chunk))
+            try:
+                for result_chunk in iter(results_queue.get, None):
+                    if isinstance(result_chunk, Exception):
+                        raise result_chunk
 
-            if self.results:
-                self.results.write_and_clear()
+                    self.results.append(result_chunk)
+                    progress_bar.update(len(result_chunk))
 
-            gen_tasks_proc.join()
-            ray_proc.join()
+                if self.results:
+                    self.results.write_and_clear()
 
-        except KeyboardInterrupt:
-            gen_tasks_proc.terminate()
-            ray_proc.terminate()
+                gen_tasks_proc.join()
+                ray_proc.join()
 
-        finally:
-            gen_tasks_proc.close()
-            ray_proc.close()
+            except KeyboardInterrupt:
+                gen_tasks_proc.terminate()
+                ray_proc.terminate()
+
+            finally:
+                gen_tasks_proc.close()
+                ray_proc.close()
 
     @staticmethod
     def _process_task(task):
