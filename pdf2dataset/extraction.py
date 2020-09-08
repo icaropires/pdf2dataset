@@ -135,6 +135,9 @@ class Extraction:
         Returns tasks to be processed.
         For faulty files, only the page -1 will be available
         '''
+        if self.num_cpus == 1:
+            return self._gen_tasks_sequential()
+
         # 10 because this is a fast operation
         chunksize = int(max(1, (len(self.files)/self.num_cpus)//10))
 
@@ -145,6 +148,22 @@ class Extraction:
             results = pool.imap(
                 self.get_pages_range, self.files, chunksize=chunksize
             )
+
+            for path, range_pages in zip(self.files, results):
+                new_tasks = [
+                    self.task_class(path, p, **self.task_params)
+                    for p in range_pages
+                ]
+                tasks += new_tasks
+                pbar.update(len(range_pages))
+
+        return tasks
+
+    def _gen_tasks_sequential(self):
+        tasks = []
+
+        with tqdm(desc='Counting pages', unit='pages') as pbar:
+            results = map(self.get_pages_range, self.files)
 
             for path, range_pages in zip(self.files, results):
                 new_tasks = [
@@ -179,7 +198,7 @@ class Extraction:
         num_skipped = self.num_skipped or 0
 
         return tqdm(
-            iterable, total=num_tasks, initial=num_skipped,
+            iterable, total=num_tasks+num_skipped, initial=num_skipped,
             desc='Processing pages', unit='pages', dynamic_ncols=True
         )
 
@@ -279,14 +298,30 @@ class Extraction:
             - Returns the resultant dataframe
         '''
 
+        if self.num_cpus == 1:
+            return self._apply_sequential(tasks)
+
         num_tasks = len(tasks)
         tasks = (self.copy_and_load_task(t) for t in tasks)
 
         with Pool(self.num_cpus) as pool:
-            processing_tasks = pool.imap_unordered(self._process_task, tasks)
+            processing_tasks = pool.imap_unordered(
+                self._process_task, tasks, self.chunksize
+            )
             results = self._get_processing_bar(num_tasks, processing_tasks)
 
             self.results.append(results)
+
+        return self.results.get()
+
+    def _apply_sequential(self, tasks):
+        num_tasks = len(tasks)
+        tasks = (self.copy_and_load_task(t) for t in tasks)
+
+        processing_tasks = map(self._process_task, tasks)
+
+        results = self._get_processing_bar(num_tasks, processing_tasks)
+        self.results.append(results)
 
         return self.results.get()
 

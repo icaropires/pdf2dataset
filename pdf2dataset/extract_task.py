@@ -8,16 +8,19 @@ from functools import wraps
 import pyarrow as pa
 
 
-def feature(pyarrow_type, is_helper=False, exceptions=None):
+def feature(pyarrow_type=None, is_helper=False, exceptions=None, **type_args):
     exceptions = exceptions or tuple()
     exceptions = tuple(exceptions)
 
+    if not (pyarrow_type or is_helper):
+        raise ValueError("If feature is not helper, must set 'pyarrow_type'")
+
     def decorator(feature_method):
+        feature_method.pyarrow_type = None
         feature_method.is_feature = True
         feature_method.is_helper = is_helper
-        feature_method.pyarrow_type = None
 
-        type_ = getattr(pa, pyarrow_type)()
+        type_ = getattr(pa, pyarrow_type)(**type_args)
 
         if isinstance(type_, pa.DataType):
             feature_method.pyarrow_type = type_
