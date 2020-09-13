@@ -20,12 +20,13 @@ def feature(pyarrow_type=None, is_helper=False, exceptions=None, **type_args):
         feature_method.is_feature = True
         feature_method.is_helper = is_helper
 
-        type_ = getattr(pa, pyarrow_type)(**type_args)
+        if pyarrow_type is not None:
+            type_ = getattr(pa, pyarrow_type)(**type_args)
 
-        if isinstance(type_, pa.DataType):
-            feature_method.pyarrow_type = type_
-        else:
-            raise ValueError(f'Invalid PyArrow type {pyarrow_type}!')
+            if isinstance(type_, pa.DataType):
+                feature_method.pyarrow_type = type_
+            else:
+                raise ValueError(f'Invalid PyArrow type {pyarrow_type}!')
 
         @wraps(feature_method)
         def inner(*args, **kwargs):
@@ -45,12 +46,8 @@ def feature(pyarrow_type=None, is_helper=False, exceptions=None, **type_args):
 # TODO: Eventually, I'll make this a new lib
 class ExtractTask(ABC):
 
-    fixed_featues = ('path')
+    fixed_featues = ('path',)
     _feature_prefix = 'get_'  # Optional
-
-    # Memoization
-    _helper_list = None
-    _features_list = {}
 
     def __init__(self, path, file_bin=None, sel_features='all'):
         self.path = path
@@ -61,6 +58,11 @@ class ExtractTask(ABC):
         self._errors = {}
 
         self._init_all_features()
+
+    def __init_subclass__(cls, **kwargs):
+        # Memoization
+        cls._helper_list = None
+        cls._features_list = {}
 
     @classmethod
     def list_helper_features(cls):

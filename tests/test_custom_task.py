@@ -1,8 +1,6 @@
-import pytest
 from pathlib import Path
 
 import pyarrow as pa
-
 from pdf2dataset import extract, feature, PdfExtractTask
 
 
