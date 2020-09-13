@@ -1,7 +1,18 @@
+import pytest
 from pathlib import Path
 
 import pyarrow as pa
-from pdf2dataset import extract, feature, PdfExtractTask
+import numpy as np
+from PIL import Image
+from pdf2dataset import (
+    PdfExtractTask,
+    extract,
+    feature,
+    image_to_bytes,
+    image_from_bytes,
+)
+
+from .conftest import SAMPLES_DIR, SAMPLE_IMAGE
 
 
 class MyCustomTask(PdfExtractTask):
@@ -21,6 +32,31 @@ class MyCustomTask(PdfExtractTask):
     @feature('string', exceptions=[ValueError])
     def get_wrong(self):
         raise ValueError("There was a problem!")
+
+
+@pytest.fixture
+def image():
+    return Image.open(SAMPLE_IMAGE)
+
+
+@pytest.fixture
+def image_bytes():
+    with open(SAMPLE_IMAGE, 'rb') as f:
+        bytes_ = f.read()
+
+    return bytes_
+
+
+def test_imagefrombytes(image, image_bytes):
+
+    assert image_from_bytes(image_bytes) == image
+
+
+def test_imagetobytes(image, image_bytes):
+    # png because jpeg change pixel values
+    calculated = image_from_bytes(image_to_bytes(image, 'png'))
+
+    assert (np.array(calculated) == np.array(image)).all()
 
 
 def test_list_features():
@@ -51,7 +87,7 @@ def test_list_helper_features():
 
 def test_saving_to_disk(tmp_path):
     out_file = tmp_path / 'my_df.parquet.gzip'
-    extract('tests/samples', out_file, task_class=MyCustomTask)
+    extract(SAMPLES_DIR, out_file, task_class=MyCustomTask)
 
     assert Path(out_file).exists()
 
