@@ -4,76 +4,17 @@ from hashlib import md5
 
 import pytest
 import pandas as pd
-import numpy as np
 from PIL import Image
 
 from pdf2dataset import (
     ExtractionFromMemory,
     PdfExtractTask,
     extract,
-    extract_text,
-    image_to_bytes,
-    image_from_bytes,
+    extract_text
 )
 
 from .testing_dataframe import check_and_compare
-
-
-SAMPLES_DIR = Path('tests/samples')
-TEST_IMAGE = SAMPLES_DIR / 'single_page1_1.jpeg'
-PARQUET_ENGINE = 'pyarrow'
-
-
-@pytest.fixture
-def expected_all():
-
-    def read_image(path, page):
-        if page == -1:
-            return None
-
-        path = Path(path).with_suffix('')
-        image_name = f'{path}_{page}.jpeg'
-        image_path = Path(SAMPLES_DIR) / image_name
-
-        with open(image_path, 'rb') as f:
-            image_bin = f.read()
-
-        return image_bin
-
-    rows = [
-        ['path', 'page', 'text', 'error_bool'],
-
-        ['multi_page1.pdf', 1, 'First page', False],
-        ['multi_page1.pdf', 2, 'Second page', False],
-        ['multi_page1.pdf', 3, 'Third page', False],
-        ['sub1/copy_multi_page1.pdf', 1, 'First page', False],
-        ['sub1/copy_multi_page1.pdf', 2, 'Second page', False],
-        ['sub1/copy_multi_page1.pdf', 3, 'Third page', False],
-        ['single_page1.pdf', 1, 'My beautiful sample!', False],
-        ['sub2/copy_single_page1.pdf', 1, 'My beautiful sample!', False],
-        ['invalid1.pdf', -1, None, True]
-    ]
-
-    names = rows.pop(0)
-    expected_dict = {n: r for n, r in zip(names, zip(*rows))}
-
-    df = pd.DataFrame(expected_dict)
-    df['image'] = df.apply(lambda row: read_image(row.path, row.page), axis=1)
-
-    return df
-
-
-@pytest.fixture
-def image():
-    return Image.open(TEST_IMAGE)
-
-
-@pytest.fixture
-def image_bytes():
-    with open(TEST_IMAGE, 'rb') as f:
-        bytes_ = f.read()
-
-    return bytes_
+from .conftest import SAMPLES_DIR, PARQUET_ENGINE
 
 
 class TestExtractionCore:
@@ -82,7 +23,7 @@ class TestExtractionCore:
         True,
         False,
     ))
-    def test_extraction_big(self, tmp_path, is_ocr, expected_all):
+    def test_extraction_big(self, tmp_path, is_ocr, complete_df):
         result_path = tmp_path / 'result.parquet.gzip'
 
         extract(SAMPLES_DIR, result_path,
@@ -93,9 +34,9 @@ class TestExtractionCore:
         if is_ocr:
             df['text'] = df['text'].str.strip()
 
-        check_and_compare(df, expected_all, is_ocr=is_ocr)
+        check_and_compare(df, complete_df, is_ocr=is_ocr)
 
-    def test_append_result(self, tmp_path, expected_all):
+    def test_append_result(self, tmp_path, complete_df):
         result_path = tmp_path / 'result.parquet.gzip'
 
         extract(SAMPLES_DIR, result_path, saving_interval=1, features='all')
@@ -103,9 +44,9 @@ class TestExtractionCore:
         # Small 'chunk_df_size' to append to result multiple times
         df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
 
-        check_and_compare(df, expected_all)
+        check_and_compare(df, complete_df)
 
-    def test_passing_paths_list(self, tmp_path, expected_all):
+    def test_passing_paths_list(self, tmp_path, complete_df):
         result_path = tmp_path / 'result.parquet.gzip'
         files_list = Path(SAMPLES_DIR).rglob('*.pdf')
 
@@ -114,11 +55,11 @@ class TestExtractionCore:
 
         df = extract(files_list, result_path, small=True)
 
-        # Paths will be relative to pwd, so adapting expected_all
-        expected_all['path'] = expected_all['path'].apply(
+        # Paths will be relative to pwd, so adapting complete_df
+        complete_df['path'] = complete_df['path'].apply(
             lambda p: str(SAMPLES_DIR / p)
         )
-        check_and_compare(df, expected_all)
+        check_and_compare(df, complete_df)
 
     def test_filter_processed(self, tmp_path):
         with open(SAMPLES_DIR / 'single_page1.pdf', 'rb') as f:
@@ -166,13 +107,13 @@ class TestExtractionSmall:
         True,
         False,
     ))
-    def test_extraction_small(self, is_ocr, expected_all):
+    def test_extraction_small(self, is_ocr, complete_df):
         df = extract(SAMPLES_DIR, small=True, ocr_lang='eng', ocr=is_ocr)
 
         if is_ocr:
             df['text'] = df['text'].str.strip()
 
-        check_and_compare(df, expected_all, is_ocr=is_ocr)
+        check_and_compare(df, complete_df, is_ocr=is_ocr)
 
     def test_return_list(self):
         def sort(doc):
@@ -226,30 +167,30 @@ class TestExtractionSmall:
 
 
 class TestParams:
-    def test_features_as_list(self, expected_all):
+    def test_features_as_list(self, complete_df):
         df = extract(SAMPLES_DIR, small=True, features=['text', 'image'])
-        check_and_compare(df, expected_all)
+        check_and_compare(df, complete_df)
 
     @pytest.mark.parametrize('excluded', [
         'text',
         'image',
     ])
-    def test_exclude_feature(self, excluded, expected_all):
+    def test_exclude_feature(self, excluded, complete_df):
         features = PdfExtractTask.list_features()
         features.remove(excluded)
 
         df = extract(SAMPLES_DIR, small=True, features=features)
 
-        columns = list(expected_all.columns)
+        columns = list(complete_df.columns)
         columns.remove(excluded)
 
-        check_and_compare(df, expected_all[columns])
+        check_and_compare(df, complete_df[columns])
 
-    def test_empty_feature(self, expected_all):
+    def test_empty_feature(self, complete_df):
         df = extract(SAMPLES_DIR, small=True, features='')
 
         columns = list(PdfExtractTask.fixed_featues) + ['error_bool']
-        check_and_compare(df, expected_all[columns])
+        check_and_compare(df, complete_df[columns])
 
     @pytest.mark.parametrize('size', (
         ('10x10'),
@@ -285,7 +226,7 @@ class TestParams:
         (200, True),
         (2000, False),
     ))
-    def test_low_ocr_image(self, expected_all, ocr_image_size, is_low):
+    def test_low_ocr_image(self, complete_df, ocr_image_size, is_low):
         df = extract_text(
             SAMPLES_DIR, small=True, ocr=True,
             ocr_image_size=ocr_image_size, ocr_lang='eng'
@@ -294,7 +235,7 @@ class TestParams:
         df = df.dropna(subset=['text'])
         serie = df.iloc[0]
 
-        expected = expected_all.dropna(subset=['text'])
+        expected = complete_df.dropna(subset=['text'])
         expected = expected[(expected.path == serie.path)
                             & (expected.page == serie.page)]
 
@@ -304,51 +245,3 @@ class TestParams:
             assert serie.text.strip() != expected_serie.text.strip()
         else:
             assert serie.text.strip() == expected_serie.text.strip()
-
-    def test_imagefrombytes(self, image, image_bytes):
-
-        assert image_from_bytes(image_bytes) == image
-
-    def test_imagetobytes(self, image, image_bytes):
-        # png because jpeg change pixel values
-        calculated = image_from_bytes(image_to_bytes(image, 'png'))
-
-        assert (np.array(calculated) == np.array(image)).all()
-
-
-class TestExtractionFromMemory:
-
-    @pytest.mark.parametrize('small', (
-        True,
-        False,
-    ))
-    def test_passing_tasks(self, tmp_path, small):
-        with open(SAMPLES_DIR / 'single_page1.pdf', 'rb') as f:
-            pdf1_bin = f.read()
-
-        with open(SAMPLES_DIR / 'multi_page1.pdf', 'rb') as f:
-            pdf2_bin = f.read()
-
-        tasks = [
-            ('doc1.pdf', pdf1_bin),  # All pages
-            ('2.pdf', pdf2_bin, 2),  # Just page 2
-            ('pdf2.pdf', pdf2_bin, 3),  # Just page 3
-        ]
-
-        expected_dict = {
-            'path': ['pdf2.pdf', '2.pdf', 'doc1.pdf'],
-            'page': [3, 2, 1],
-            'text': ['Third page', 'Second page', 'My beautiful sample!'],
-            'error': [None, None, None],
-        }
-        expected = pd.DataFrame(expected_dict)
-
-        if small:
-            df = extract_text(tasks=tasks, small=small)
-        else:
-            result_path = tmp_path / 'result.parquet.gzip'
-            extract_text(tasks, result_path)
-
-            df = pd.read_parquet(result_path, engine=PARQUET_ENGINE)
-
-        check_and_compare(df, expected, list(expected.columns))

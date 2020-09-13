@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "pdf2dataset"
-version = "0.5.2"
+version = "0.5.3"
 readme = "README.md"
 description = "Easily convert a subdirectory with big volume of PDF documents into a dataset, supports extracting text and images"
 authors = ["Ícaro Pires <icaropsa@gmail.com>"]
