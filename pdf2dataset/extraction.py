@@ -1,3 +1,4 @@
+import asyncio
 import io
 import itertools as it
 import logging
@@ -6,11 +7,12 @@ from time import sleep
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, wait, FIRST_EXCEPTION, as_completed
 import queue
 from threading import Thread
-from multiprocessing import Pool, Process, Queue, Value
+from multiprocessing import Pool, Process, Queue, Value, Manager
 from pathlib import Path
 from more_itertools import ichunked
 from collections import deque
 from functools import partial
+from aiostream import stream
 
 import ray
 import pdftotext
@@ -36,7 +38,9 @@ class Extraction:
 
         # Config params
         small=False, check_input=True, chunk_size=None,
-        saving_interval=5000, max_files_memory=1000, files_pattern='*.pdf',
+        saving_interval=5000, 
+        max_files_memory=1000, #TODO: Use this parameter
+        files_pattern='*.pdf',
 
         # Task_params
         ocr=False, ocr_image_size=None, ocr_lang='por', features='all',
@@ -87,7 +91,6 @@ class Extraction:
         )
 
         self.tasks_queue = Queue()
-        self.loaded_tasks_queue = Queue(max_files_memory)
 
     def _check_input(self):
         if not any([self.input_dir, self.files_list]):
@@ -135,35 +138,14 @@ class Extraction:
         # Here feedback is better than keeping use of the generator
         return list(tqdm(pdf_files, desc='Looking for files', unit='files'))
 
-    def _load_tasks(self):
-        def load_and_put(task):
-            task = task.copy()
-            task.load_bin()
-
-            self.loaded_tasks_queue.put(task)
-
-        futures = []
-        with ThreadPoolExecutor() as executor:
-            for task in iter(self.tasks_queue.get, None):
-                future = executor.submit(load_and_put, task)
-                futures.append(future)
-
-            for future in futures:
-                future.result()
-
-        self.loaded_tasks_queue.put(None)
-
     def _gen_tasks_proc(self, total_tasks):
-        load_thread = Thread(target=self._load_tasks)
-        load_thread.start()
-
         gen_tasks = partial(
             self.gen_tasks,
             task_class=self.task_class, task_params=self.task_params
         )
 
         with Pool(self.num_cpus) as pool:
-            mapping = pool.imap_unordered(gen_tasks, self.files)
+            mapping = pool.imap_unordered(gen_tasks, self.files, chunksize=2)
             tasks = it.chain.from_iterable(mapping)
 
             for task in tasks:
@@ -171,7 +153,6 @@ class Extraction:
                 total_tasks.value += 1
 
         self.tasks_queue.put(None)
-        load_thread.join()
 
     @classmethod
     def gen_tasks(cls, path, task_class, task_params):
@@ -181,7 +162,6 @@ class Extraction:
         For faulty files, only the page -1 will be available
         '''
         def gen_task(page):
-            file_bin = path.read_bytes()
             return task_class(path, page, **task_params)
 
         return [gen_task(page) for page in cls.get_pages_range(path)]
@@ -218,84 +198,76 @@ class Extraction:
     def _process_chunk_ray(chunk):
         return [t.process() for t in chunk]
 
-#    def _ray_producer(self, loaded_tasks_queue, refs_queue):
-#        loaded_tasks = iter(loaded_tasks_queue.get, None)
-#        chunks = ichunked(loaded_tasks, self.chunk_size)
-#
-#        import timeit
-#        c = 0
-#        n = 0
-#        for chunk in chunks:
-#            start = timeit.default_timer()
-#            future = self._process_chunk_ray.remote(list(chunk))
-#            c += timeit.default_timer() - start
-#            n += 1
-#            
-#            refs_queue.put(future)
-#
-#            if n % 100 == 0:
-#                print('@@@@@@@@@@@@@@@@@')
-#                print(c/n)
-#                print('@@@@@@@@@@@@@@@@@')
-#        refs_queue.put(None)
+    @staticmethod
+    def copy_and_load_task(task):
+        task = task.copy()  # Copy to have control over memory references
+        task.load_bin()
 
-    def _ray_producer(self, loaded_tasks_queue, refs_queue):
-        loaded_tasks = iter(loaded_tasks_queue.get, None)
-        submit_fn = self._process_chunk_ray.remote
+        return task
 
-        has_finished = False
+    @classmethod
+    async def _submit_chunk_ray(cls, chunk, pool, results_queue):
+        loop = asyncio.get_running_loop()
 
-        with ThreadPoolExecutor() as executor:
-            while not has_finished:
-                futures = []
+        chunk = [loop.run_in_executor(pool, cls.copy_and_load_task, t) for t in chunk]
+        chunk = await asyncio.gather(*chunk)
 
-                for _ in range(refs_queue.maxsize):
-                    chunk = list(it.islice(loaded_tasks, self.chunk_size))
+        ref = cls._process_chunk_ray.remote(chunk)
+        loop.run_in_executor(pool, results_queue.put, await ref)
 
-                    if not chunk:
-                        has_finished = True
-                        break
+        return ref
 
-                    future = executor.submit(submit_fn, chunk)
-                    futures.append(future)
+    async def _ray_process_aux(self, tasks_queue, results_queue):
+        with ThreadPoolExecutor() as pool:
+            loop = asyncio.get_running_loop()
+            loop.set_default_executor(pool)
 
-                for future in as_completed(futures):
-                    refs_queue.put(future.result())
+            num_initial = int(ray.available_resources()['CPU'] * 5)
 
-            refs_queue.put(None)
+            tasks = stream.iterate(iter(tasks_queue.get, None))
+            chunks = stream.chunks(tasks, self.chunk_size)
 
-    def _ray_consumer(self, results_queue, refs_queue):
-        for future in iter(refs_queue.get, None):
-            (finished, *_), rest = ray.wait([future], num_returns=1)
-            result = ray.get(finished)
+            initial_stream = stream.take(chunks, num_initial)
 
-            results_queue.put(result)
+            async with initial_stream.stream() as streamer:
+                aws = [
+                    asyncio.create_task(
+                        self._submit_chunk_ray(chunk, pool, results_queue)
+                    ) async for chunk in streamer
+                ]
+
+            while aws:
+                dones, pending = await asyncio.wait(aws, return_when=asyncio.FIRST_COMPLETED)
+
+                for done in dones:
+                    await done
+
+                new_stream = stream.take(chunks, len(dones))
+                async with new_stream.stream() as streamer:
+                    new_aws = set([
+                        asyncio.create_task(
+                            self._submit_chunk_ray(chunk, pool, results_queue)
+                        ) async for chunk in streamer
+                    ])
+
+                aws = pending | new_aws
 
         results_queue.put(None)
 
-    def _ray_process_proc(self, loaded_tasks_queue, results_queue):
+    def _ray_process_proc(self, tasks_queue, results_queue):
         ray.init(**self.ray_params)
 
-        max_futures = int(ray.available_resources()['CPU']) * 3  # TODO: create variable
-        refs_queue = queue.Queue(max_futures)
-
-        # Not using 'with' because was blocking exceptions to be raised
-        executor = ThreadPoolExecutor(2)
-
-        producer = executor.submit(self._ray_producer, loaded_tasks_queue, refs_queue)
-        consumer = executor.submit(self._ray_consumer,  results_queue, refs_queue)
-
-        for f in as_completed([producer, consumer]):
-            f.result()
-
-        executor.shutdown()
+        try:
+            asyncio.run(self._ray_process_aux(tasks_queue, results_queue))
+        finally:
+            ray.shutdown()
 
     def _update_bar_total(self, progress_bar, total_tasks):
         while True:
             progress_bar.total = total_tasks.value
             progress_bar.refresh()
 
-            sleep(0.2)
+            sleep(1)
 
     def _apply_to_big(self, tasks):
         'Apply the extraction to a big volume of data'
@@ -314,7 +286,7 @@ class Extraction:
             Thread(target=self._update_bar_total, args=(progress_bar, total_tasks), daemon=True).start()
 
             gen_tasks_proc = Process(target=self._gen_tasks_proc, args=(total_tasks,))
-            ray_proc = Process(target=self._ray_process_proc, args=(self.loaded_tasks_queue, results_queue))
+            ray_proc = Process(target=self._ray_process_proc, args=(self.tasks_queue, results_queue))
 
             gen_tasks_proc.start()
             ray_proc.start()

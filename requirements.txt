@@ -1,3 +1,4 @@
+aiostream>=0.4.1
 dask[dataframe]==2.23.0
 flake8==3.8.3
 more-itertools>=8.4.0
